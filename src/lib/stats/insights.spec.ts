@@ -232,11 +232,11 @@ describe('bucketBy', () => {
 	it('totals magnitudes, biggest first, with each share of the whole', () => {
 		const buckets = bucketBy(
 			[
-				makeTransaction({ date: '2026-03-01', amount: -75, category: 'Food and Drink' }),
-				makeTransaction({ date: '2026-03-02', amount: -25, category: 'Food and Drink' }),
-				makeTransaction({ date: '2026-03-03', amount: -100, category: 'Transport' })
+				makeTransaction({ date: '2026-03-01', amount: -75, bankCategory: 'Food and Drink' }),
+				makeTransaction({ date: '2026-03-02', amount: -25, bankCategory: 'Food and Drink' }),
+				makeTransaction({ date: '2026-03-03', amount: -100, bankCategory: 'Transport' })
 			],
-			(transaction) => transaction.category
+			(transaction) => transaction.bankCategory
 		);
 
 		expect(buckets).toEqual([
@@ -247,8 +247,8 @@ describe('bucketBy', () => {
 
 	it('labels a blank key rather than dropping it', () => {
 		const buckets = bucketBy(
-			[makeTransaction({ date: '2026-03-01', amount: -10, category: '' })],
-			(t) => t.category
+			[makeTransaction({ date: '2026-03-01', amount: -10, bankCategory: '' })],
+			(t) => t.bankCategory
 		);
 
 		expect(buckets[0].label).toBe('Uncategorised');
@@ -433,18 +433,25 @@ describe('buildInsights', () => {
 			type: 'EFT',
 			merchant: 'Employer'
 		}),
-		makeTransaction({ date: '2026-03-02', amount: -2000, merchant: 'Rent', category: 'Home' }),
+		makeTransaction({
+			date: '2026-03-02',
+			amount: -2000,
+			merchant: 'Rent',
+			bankCategory: 'Home',
+			category: 'Utilities and Rates'
+		}),
 		makeTransaction({
 			date: '2026-03-03',
 			amount: -500,
 			merchant: 'Grocer',
-			category: 'Food and Drink'
+			bankCategory: 'Food and Drink'
 		}),
 		makeTransaction({
 			date: '2026-03-04',
 			amount: -6,
 			merchant: 'Bank',
-			category: 'Fees and Interest',
+			bankCategory: 'Fees and Interest',
+			category: 'Bank Fees',
 			isFee: true,
 			isDeclined: true,
 			description: 'Txn Declined Fee'
@@ -461,7 +468,7 @@ describe('buildInsights', () => {
 			amount: -1000,
 			flow: 'transfer',
 			type: 'Transfer',
-			category: 'Not for Financial Analyser'
+			bankCategory: 'Not for Financial Analyser'
 		})
 	];
 
@@ -543,9 +550,9 @@ describe('buildInsights', () => {
 		const { categories } = buildInsights(transactions, 6494);
 
 		expect(categories.map((bucket) => bucket.label)).toEqual([
-			'Home',
-			'Food and Drink',
-			'Fees and Interest'
+			'Utilities and Rates',
+			'Groceries',
+			'Bank Fees'
 		]);
 	});
 });

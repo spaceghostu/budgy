@@ -17,6 +17,7 @@
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import TransactionList from '$lib/components/TransactionList.svelte';
 	import TransactionTable from '$lib/components/TransactionTable.svelte';
+	import UncategorisedList from '$lib/components/UncategorisedList.svelte';
 	import { formatCount, formatCurrency, formatSigned } from '$lib/format.js';
 	import { StatementState } from '$lib/state/statement.svelte.js';
 	import { buildHighlights } from '$lib/stats/highlights.js';
@@ -209,6 +210,24 @@
 				{/snippet}
 			</ChartCard>
 		</div>
+
+		<!-- Sits under the breakdowns it corrects: a category chosen here moves the
+		     money out of "Uncategorised" and into a bar above. -->
+		{#if state.uncategorised.length > 0 || state.appliedRules.length > 0}
+			<ChartCard
+				title="Spending with no category"
+				subtitle="File what the bank left blank, a merchant at a time"
+			>
+				{#snippet chart()}
+					<UncategorisedList
+						pending={state.uncategorised}
+						applied={state.appliedRules}
+						options={state.categoryOptions}
+						onassign={(merchant, category) => state.setCategory(merchant, category)}
+					/>
+				{/snippet}
+			</ChartCard>
+		{/if}
 
 		<div class="two-up">
 			<ChartCard

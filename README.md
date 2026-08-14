@@ -13,11 +13,13 @@ It reads two Discovery Bank exports, either on its own or both together:
 | **Smart Search export** (CSV) | The bank's categories, transaction types and times  |
 
 Neither is complete alone, which is the point of taking both: the CSV lists amounts
-but no balances, and the PDF has balances but no categories. Given both, the app
+but no balances, and the PDF has balances but no filing. Given both, the app
 matches them row by row and you get real balances _and_ categorised spending.
 
 The CSV column matching is alias-based, so most bank CSVs with a date, a description
-and an amount will work. The PDF reader is written for Discovery's certified layout.
+and an amount will work — one without a `SubCategory` column simply arrives unfiled,
+and the card described below is how it gets filed. The PDF reader is written for
+Discovery's certified layout.
 
 ## What it shows
 
@@ -30,7 +32,14 @@ and an amount will work. The PDF reader is written for Discovery's certified lay
   drawn in full strength and the rest recede, with a dashed line for the typical
   month. Its own controls choose what to plot (net, money out, money in) and which
   months to draw.
-- **Where the money went** — by category and by merchant.
+- **Where the money went** — by category and by merchant. A category here is the
+  bank's `SubCategory`: `Groceries`, `Eating Out and Takeouts` and `Coffee` are three
+  different decisions, where the bank's own heading makes them one "Food and Drink"
+  bar you cannot act on.
+- **What the bank never filed** — the merchants behind the uncategorised spending,
+  each with a category to give it, from the bank's own list or one you name yourself.
+  One choice covers every transaction from that merchant, in this statement and in
+  next month's.
 - **Charges that repeat** — debit orders, plus card merchants billing a steady
   amount roughly a month apart.
 - **Highlights** — runway, surplus or shortfall, what the fees cost, the heaviest day.
@@ -93,6 +102,11 @@ unless you ask Claude for a read, which sends the aggregate payload described ab
 and nothing else. Closing the tab forgets them, unless you tick **Keep these files in
 this browser** — which writes them to local storage on this device only.
 
+The categories you choose for merchants are kept on this device without asking, since
+a merchant name and a label are your own filing rather than your bank's record —
+and the work of filing a month's stray rows is worth carrying into the next export.
+Clearing the files leaves them in place; each is removable from the card that set it.
+
 `reference/` is gitignored, so sample statements stay out of the repository. Test
 fixtures are synthetic rows in the same shape, never real data.
 
@@ -150,8 +164,37 @@ with synthetic pages.
 **Transfers are not spending.** Rows the bank files under
 `Not for Financial Analyser`, plus `Transfer` / `Scheduled transfer` / `Re-direct`
 types and `Inter account transfer` wording, move money between your own accounts.
-They count towards the balance and are excluded from income, spending and category
-totals. The wording rule matters because PDF rows have no category column.
+They count towards the balance and are excluded from income, spending and the
+breakdowns. The wording rule matters because PDF rows have no category column.
+
+**A category here is the bank's sub-category.** The bank files at two levels: a dozen
+broad headings, and a finer label under each. `Groceries`, `Eating Out and Takeouts`
+and `Coffee` are three decisions a reader can act on; "Food and Drink" is one bar they
+cannot. So the finer label is what `Transaction.category` holds and what every
+breakdown, list and export means by category.
+
+The heading is kept alongside as `bankCategory`, and is read for exactly one thing:
+what a row _is_. `Not for Financial Analyser` and `Fees and Interest` are stated at
+that level, so classification reads it rather than the category. Classifying from the
+finer label instead would mean a sub-category the bank added under
+`Not for Financial Analyser` silently counting as spending.
+
+**Categories you add are keyed by merchant, not by transaction.** A transaction's id
+is its position in a file (`csv:31`, `12345678901:4`), so loading the PDF beside the
+CSV — or opening next month's export — renumbers them, and a label keyed by id would
+quietly land on a different transaction. A merchant is derived from the description
+and survives both. `categorise.ts` only ever relabels rows the bank left unfiled, so
+what the bank said stays authoritative. A filed row also takes the bank heading its
+new category sits under — from this statement's own pairings, or the bank's published
+taxonomy — so the transfer and fee rules still apply: filing a merchant under
+`Transfers` takes it out of spending exactly as it would have been had the bank filed
+it that way.
+
+A category of your own needs no list of its own: it is on offer for as long as
+something is filed under it, whether that is a row in these files or a choice waiting
+for the merchant to reappear. A name already in use resolves to the one that is there
+— type `groceries` and it files under `Groceries`, rather than splitting the same
+spending across two spellings of it.
 
 **Recurring detection is deliberately conservative.** A debit order counts on
 sight — it is a standing mandate. A card merchant has to bill in two or more months,

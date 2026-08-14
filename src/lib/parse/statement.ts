@@ -146,8 +146,11 @@ function toTransaction(
 
 	const description = read(row, columnMap, 'description');
 	const type = read(row, columnMap, 'type');
-	const category = read(row, columnMap, 'category') || 'Uncategorised';
-	const classifiable = { amount, type, category, description };
+	// The columns are named for the file; the fields are named for this app,
+	// which files by the finer of the two. See `Transaction` in `types.ts`.
+	const bankCategory = read(row, columnMap, 'category') || 'Uncategorised';
+	const category = read(row, columnMap, 'subCategory') || 'Uncategorised';
+	const classifiable = { amount, type, bankCategory, description };
 
 	return {
 		transaction: {
@@ -162,7 +165,7 @@ function toTransaction(
 			counterparty: read(row, columnMap, 'counterparty'),
 			amount,
 			category,
-			subCategory: read(row, columnMap, 'subCategory') || 'Uncategorised',
+			bankCategory,
 			note: read(row, columnMap, 'note'),
 			merchant: toMerchant(description || read(row, columnMap, 'counterparty')),
 			flow: classifyFlow(classifiable),

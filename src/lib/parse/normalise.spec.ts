@@ -45,23 +45,27 @@ describe('toMerchant', () => {
 
 /** The fields classification reads. Defaults stand in for a PDF-only row. */
 function row(overrides: Partial<Classifiable> = {}): Classifiable {
-	return { amount: -100, type: '', category: '', description: '', ...overrides };
+	return { amount: -100, type: '', bankCategory: '', description: '', ...overrides };
 }
 
 describe('isTransfer', () => {
 	it('detects the category the bank reserves for own-account movement', () => {
-		expect(isTransfer(row({ type: 'Transfer', category: 'Not for Financial Analyser' }))).toBe(
+		expect(isTransfer(row({ type: 'Transfer', bankCategory: 'Not for Financial Analyser' }))).toBe(
 			true
 		);
 	});
 
 	it('detects transfer types the bank filed as uncategorised', () => {
-		expect(isTransfer(row({ type: 'Re-direct', category: 'Uncategorised' }))).toBe(true);
-		expect(isTransfer(row({ type: 'Scheduled transfer', category: 'Uncategorised' }))).toBe(true);
+		expect(isTransfer(row({ type: 'Re-direct', bankCategory: 'Uncategorised' }))).toBe(true);
+		expect(isTransfer(row({ type: 'Scheduled transfer', bankCategory: 'Uncategorised' }))).toBe(
+			true
+		);
 	});
 
 	it('ignores casing differences in the type column', () => {
-		expect(isTransfer(row({ type: 'SCHEDULED TRANSFER', category: 'Uncategorised' }))).toBe(true);
+		expect(isTransfer(row({ type: 'SCHEDULED TRANSFER', bankCategory: 'Uncategorised' }))).toBe(
+			true
+		);
 	});
 
 	it('detects own-account movement by wording alone, for rows from a PDF', () => {
@@ -72,17 +76,17 @@ describe('isTransfer', () => {
 	});
 
 	it('leaves ordinary spending alone', () => {
-		expect(isTransfer(row({ type: 'Card on file', category: 'Food and Drink' }))).toBe(false);
+		expect(isTransfer(row({ type: 'Card on file', bankCategory: 'Food and Drink' }))).toBe(false);
 	});
 });
 
 describe('isFee', () => {
 	it('detects fees by category even when the type is a purchase type', () => {
-		expect(isFee(row({ type: 'Card on file', category: 'Fees and Interest' }))).toBe(true);
+		expect(isFee(row({ type: 'Card on file', bankCategory: 'Fees and Interest' }))).toBe(true);
 	});
 
 	it('detects fees by type', () => {
-		expect(isFee(row({ type: 'Fee', category: 'Uncategorised' }))).toBe(true);
+		expect(isFee(row({ type: 'Fee', bankCategory: 'Uncategorised' }))).toBe(true);
 	});
 
 	it('detects fees by wording for rows from a PDF', () => {
@@ -93,11 +97,13 @@ describe('isFee', () => {
 
 	it('does not let wording override a category the bank did supply', () => {
 		// A merchant whose name mentions fees is still a purchase.
-		expect(isFee(row({ description: 'NO FEES BUTCHERY', category: 'Food and Drink' }))).toBe(false);
+		expect(isFee(row({ description: 'NO FEES BUTCHERY', bankCategory: 'Food and Drink' }))).toBe(
+			false
+		);
 	});
 
 	it('leaves ordinary spending alone', () => {
-		expect(isFee(row({ type: 'Apple Pay', category: 'Transport' }))).toBe(false);
+		expect(isFee(row({ type: 'Apple Pay', bankCategory: 'Transport' }))).toBe(false);
 	});
 });
 
@@ -114,20 +120,24 @@ describe('isDeclined', () => {
 
 describe('classifyFlow', () => {
 	it('treats a zero-amount row as a no-op', () => {
-		expect(classifyFlow(row({ amount: 0, category: 'Miscellaneous' }))).toBe('noop');
+		expect(classifyFlow(row({ amount: 0, bankCategory: 'Miscellaneous' }))).toBe('noop');
 	});
 
 	it('treats own-account movement as a transfer regardless of sign', () => {
 		expect(
-			classifyFlow(row({ amount: 6000, type: 'Transfer', category: 'Not for Financial Analyser' }))
+			classifyFlow(
+				row({ amount: 6000, type: 'Transfer', bankCategory: 'Not for Financial Analyser' })
+			)
 		).toBe('transfer');
 		expect(
-			classifyFlow(row({ amount: -6000, type: 'Scheduled transfer', category: 'Uncategorised' }))
+			classifyFlow(
+				row({ amount: -6000, type: 'Scheduled transfer', bankCategory: 'Uncategorised' })
+			)
 		).toBe('transfer');
 	});
 
 	it('splits the rest by sign', () => {
-		expect(classifyFlow(row({ amount: 250, type: 'EFT', category: 'Other' }))).toBe('income');
-		expect(classifyFlow(row({ amount: -250, type: 'EFT', category: 'Other' }))).toBe('expense');
+		expect(classifyFlow(row({ amount: 250, type: 'EFT', bankCategory: 'Other' }))).toBe('income');
+		expect(classifyFlow(row({ amount: -250, type: 'EFT', bankCategory: 'Other' }))).toBe('expense');
 	});
 });

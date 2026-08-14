@@ -1,3 +1,11 @@
+import {
+	applyCategoryRules,
+	listRules,
+	resolveCategory,
+	categoryOptions,
+	uncategorisedGroups,
+	type CategoryRules
+} from '../categorise.ts';
 import { mergeStatements } from '../parse/merge.ts';
 import type { PdfStatement } from '../parse/pdf-rows.ts';
 import { readPdfStatement } from '../parse/pdf.ts';
@@ -14,8 +22,10 @@ import type { Insights, ParseIssue, Transaction } from '../types.ts';
 import {
 	clearKey,
 	loadAnchors,
+	loadCategoryRules,
 	loadFiles,
 	saveAnchors,
+	saveCategoryRules,
 	saveFiles,
 	type Anchor,
 	type StoredFiles
@@ -65,6 +75,8 @@ export class StatementState {
 
 	/** Balance anchors by account key, for the CSV-only case. */
 	anchors = $state<Record<string, Anchor>>({});
+	/** Categories the reader chose for merchants the bank left unfiled. */
+	categoryRules = $state<CategoryRules>({});
 	remember = $state(false);
 
 	/** The raw files, kept so "remember these files" can re-save them. */
@@ -72,7 +84,16 @@ export class StatementState {
 
 	private readonly merged = $derived(mergeStatements(this.pdfStatement, this.csvTransactions));
 
-	readonly transactions = $derived(this.merged.transactions);
+	/**
+	 * The statement, with the reader's own categories folded in.
+	 *
+	 * Applied here, where the CSV-only and merged paths meet, so everything
+	 * downstream — breakdowns, recurring charges, the search table, what Claude
+	 * is sent — sees one filing rather than each having to know about the rules.
+	 */
+	readonly transactions = $derived(
+		applyCategoryRules(this.merged.transactions, this.categoryRules)
+	);
 	readonly accounts = $derived(this.merged.accounts);
 	readonly enrichedAccount = $derived(this.merged.enrichedAccount);
 	readonly matched = $derived(this.merged.matched);
@@ -192,8 +213,24 @@ export class StatementState {
 		buildInsights(this.visible, anchorForSlice(this.accountTransactions, this.visible, this.anchor))
 	);
 
+	/**
+	 * What the categoriser offers: this statement's own categories, the bank's,
+	 * and any the reader has made — including one made for a merchant that these
+	 * particular files do not happen to mention.
+	 */
+	readonly categoryOptions = $derived(
+		categoryOptions(this.transactions, Object.values(this.categoryRules))
+	);
+
+	/** Merchants in the current view that are still unfiled, heaviest first. */
+	readonly uncategorised = $derived(uncategorisedGroups(this.visible));
+
+	/** The choices already made, counted against the whole statement, not the view. */
+	readonly appliedRules = $derived(listRules(this.categoryRules, this.merged.transactions));
+
 	constructor() {
 		this.anchors = loadAnchors();
+		this.categoryRules = loadCategoryRules();
 	}
 
 	/** Re-open the files the user chose to keep on this device. */
@@ -327,6 +364,33 @@ export class StatementState {
 
 		this.anchors = next;
 		saveAnchors(next);
+	}
+
+	/**
+	 * File every unfiled transaction from a merchant under one category.
+	 *
+	 * Kept on this device, and left in place when the files are cleared: the
+	 * labelling is the reader's, not the statement's, and next month's export
+	 * arrives with the same merchants unfiled.
+	 *
+	 * @param category One of {@link categoryOptions}, or a name of the reader's
+	 * own — resolved by {@link resolveCategory}, so a name already on the list is
+	 * filed under the one that is there rather than beside it. A blank drops the
+	 * rule again, and a name that means nothing is ignored.
+	 */
+	setCategory(merchant: string, category: string): void {
+		const next = { ...this.categoryRules };
+		if (category === '') {
+			delete next[merchant];
+		} else {
+			const resolved = resolveCategory(category, this.categoryOptions);
+			if (resolved === null) return;
+
+			next[merchant] = resolved;
+		}
+
+		this.categoryRules = next;
+		saveCategoryRules(next);
 	}
 
 	setRemember(remember: boolean): void {

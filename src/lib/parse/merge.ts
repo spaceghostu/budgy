@@ -16,7 +16,7 @@ export interface MergedStatement {
  *
  * Neither file is complete on its own: the certified PDF has the running
  * balance and every account but no categories; the Smart Search CSV has the
- * bank's categories and the time of day but no balance. The PDF is the spine —
+ * bank's own filing and the time of day but no balance. The PDF is the spine —
  * it is the certified record and its arithmetic is checked — and the CSV is
  * folded onto it wherever the two agree.
  */
@@ -207,10 +207,10 @@ function enrich(
 			type: csvRow.type,
 			counterparty: csvRow.counterparty,
 			category: csvRow.category,
-			subCategory: csvRow.subCategory,
+			bankCategory: csvRow.bankCategory,
 			note: csvRow.note,
-			flow: classifyFlow({ ...base, type: csvRow.type, category: csvRow.category }),
-			isFee: isFee({ ...base, type: csvRow.type, category: csvRow.category })
+			flow: classifyFlow({ ...base, type: csvRow.type, bankCategory: csvRow.bankCategory }),
+			isFee: isFee({ ...base, type: csvRow.type, bankCategory: csvRow.bankCategory })
 		};
 	});
 
@@ -283,7 +283,7 @@ function toTransaction(
 	const classifiable = {
 		amount: row.amount,
 		type: '',
-		category: '',
+		bankCategory: '',
 		description: row.description
 	};
 
@@ -302,7 +302,7 @@ function toTransaction(
 		counterparty: '',
 		amount: row.amount,
 		category: 'Uncategorised',
-		subCategory: 'Uncategorised',
+		bankCategory: 'Uncategorised',
 		note: '',
 		merchant: toMerchant(row.description),
 		flow: classifyFlow(classifiable),

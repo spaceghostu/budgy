@@ -3,10 +3,12 @@ import {
 	clearKey,
 	loadAnchors,
 	loadApiKey,
+	loadCategoryRules,
 	loadFiles,
 	loadTheme,
 	saveAnchors,
 	saveApiKey,
+	saveCategoryRules,
 	saveFiles,
 	saveTheme
 } from './persistence.ts';
@@ -173,6 +175,31 @@ describe('api key', () => {
 	});
 });
 
+describe('category rules', () => {
+	it('starts with none, so the bank’s own filing stands alone', () => {
+		expect(loadCategoryRules()).toEqual({});
+	});
+
+	it('round-trips a category the reader chose for a merchant', () => {
+		saveCategoryRules({ 'CORNER SHOP': 'Groceries' });
+
+		expect(loadCategoryRules()).toEqual({ 'CORNER SHOP': 'Groceries' });
+	});
+
+	it('clears the key rather than storing an empty set', () => {
+		saveCategoryRules({ 'CORNER SHOP': 'Groceries' });
+		saveCategoryRules({});
+
+		expect(localStorage.getItem('budgy:subcategories')).toBeNull();
+	});
+
+	it('ignores a stored value of the wrong shape rather than crashing', () => {
+		localStorage.setItem('budgy:subcategories', JSON.stringify({ 'CORNER SHOP': { id: 7 } }));
+
+		expect(loadCategoryRules()).toEqual({});
+	});
+});
+
 describe('without storage', () => {
 	it('degrades to in-memory rather than throwing', () => {
 		install(undefined);
@@ -181,6 +208,8 @@ describe('without storage', () => {
 		expect(loadTheme()).toBe('system');
 		expect(loadFiles()).toEqual({});
 		expect(loadApiKey()).toBe('');
+		expect(loadCategoryRules()).toEqual({});
+		expect(() => saveCategoryRules({ 'CORNER SHOP': 'Homeware' })).not.toThrow();
 		expect(() => saveApiKey('sk-ant-example')).not.toThrow();
 		expect(saveFiles({ csv: { name: 'x', text: 'y' } })).toBe(false);
 		expect(() => saveAnchors({ a: { balance: 1, asOf: '2026-08-09' } })).not.toThrow();

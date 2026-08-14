@@ -51,6 +51,27 @@ describe('parseStatement', () => {
 		expect(transactions.map((transaction) => transaction.amount)).toEqual([-1038, -998]);
 	});
 
+	it('files a row by the bank’s finer label, keeping its heading beside it', () => {
+		const { transactions } = parseStatement(SAMPLE);
+		const grocer = transactions.find((t) => t.description === 'GROCER 123456789');
+
+		expect(grocer).toMatchObject({ category: 'Groceries', bankCategory: 'Food and Drink' });
+	});
+
+	it('falls back to Uncategorised for an export with no sub-category column', () => {
+		const noSubCategory = [
+			'"Value Date","Transaction Description","Amount","Category"',
+			'2026-03-04,"GROCER",-450.25,"Food and Drink"'
+		].join('\n');
+
+		const { transactions } = parseStatement(noSubCategory);
+
+		expect(transactions[0]).toMatchObject({
+			category: 'Uncategorised',
+			bankCategory: 'Food and Drink'
+		});
+	});
+
 	it('classifies flow, fees and declines', () => {
 		const { transactions } = parseStatement(SAMPLE);
 		const byDescription = new Map(transactions.map((t) => [t.description, t]));

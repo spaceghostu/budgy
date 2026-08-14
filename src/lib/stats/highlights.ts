@@ -85,15 +85,17 @@ function topCategory(categories: Insights['categories'], expense: number): Highl
 	const top = categories.at(0);
 	if (top === undefined || expense <= 0) return null;
 
-	// "Uncategorised is your biggest category" tells the reader nothing about
-	// their money — it tells them about their bank. Point them somewhere useful.
+	// "Uncategorised is where most of your money went" tells the reader nothing
+	// about their money — it tells them about their bank. Point them somewhere
+	// useful, and the card that fixes it is on the same page.
 	if (top.label.toLowerCase() === 'uncategorised') {
 		return {
 			id: 'top-category',
 			tone: 'neutral',
 			text:
 				`Your bank left ${formatPercent(top.share)} of your spending uncategorised ` +
-				`(${formatCurrency(top.total)}) — the merchant breakdown is the more useful view here.`
+				`(${formatCurrency(top.total)}) — file those merchants below, or read the merchant ` +
+				'breakdown instead.'
 		};
 	}
 

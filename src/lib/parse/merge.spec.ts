@@ -69,8 +69,8 @@ describe('mergeStatements', () => {
 				date: '2025-01-02',
 				amount: -250,
 				description: 'GROCER',
-				category: 'Food and Drink',
-				subCategory: 'Groceries',
+				bankCategory: 'Food and Drink',
+				category: 'Groceries',
 				type: 'Card on file',
 				time: '14:30:00'
 			})
@@ -79,7 +79,7 @@ describe('mergeStatements', () => {
 		const merged = mergeStatements(statement(TRANSACTION_ACCOUNT), csv);
 		const grocer = merged.transactions[0];
 
-		expect(grocer.category).toBe('Food and Drink');
+		expect(grocer.bankCategory).toBe('Food and Drink');
 		expect(grocer.type).toBe('Card on file');
 		expect(grocer.time).toBe('14:30:00');
 		expect(grocer.source).toBe('both');
@@ -114,14 +114,14 @@ describe('mergeStatements', () => {
 				date: '2025-01-02',
 				amount: -250,
 				description: 'GROCER',
-				category: 'Food and Drink'
+				bankCategory: 'Food and Drink'
 			})
 		];
 
 		const merged = mergeStatements(statement(TRANSACTION_ACCOUNT, savings), csv);
 		const interest = merged.transactions.find((t) => t.description === 'Interest');
 
-		expect(interest?.category).toBe('Uncategorised');
+		expect(interest?.bankCategory).toBe('Uncategorised');
 		expect(interest?.source).toBe('pdf');
 	});
 
@@ -131,18 +131,23 @@ describe('mergeStatements', () => {
 			['2025-01-02', 'SHOP B', -50, 900]
 		]);
 		const csv = [
-			makeTransaction({ date: '2025-01-02', amount: -50, description: 'SHOP B', category: 'Home' }),
+			makeTransaction({
+				date: '2025-01-02',
+				amount: -50,
+				description: 'SHOP B',
+				bankCategory: 'Home'
+			}),
 			makeTransaction({
 				date: '2025-01-02',
 				amount: -50,
 				description: 'SHOP A',
-				category: 'Transport'
+				bankCategory: 'Transport'
 			})
 		];
 
 		const merged = mergeStatements(statement(twice), csv);
 
-		expect(merged.transactions.map((t) => [t.description, t.category])).toEqual([
+		expect(merged.transactions.map((t) => [t.description, t.bankCategory])).toEqual([
 			['SHOP A', 'Transport'],
 			['SHOP B', 'Home']
 		]);
@@ -156,13 +161,13 @@ describe('mergeStatements', () => {
 				date: '2025-01-01',
 				amount: -250,
 				description: 'GROCER',
-				category: 'Food and Drink'
+				bankCategory: 'Food and Drink'
 			})
 		];
 
 		const merged = mergeStatements(statement(TRANSACTION_ACCOUNT), csv);
 
-		expect(merged.transactions[0].category).toBe('Food and Drink');
+		expect(merged.transactions[0].bankCategory).toBe('Food and Drink');
 		expect(merged.transactions[0].date).toBe('2025-01-02');
 	});
 
@@ -178,31 +183,41 @@ describe('mergeStatements', () => {
 	it('prefers the row that settled soonest when several could fit', () => {
 		const twice = account('Transaction Account', '12345678901', [['2025-01-05', 'SHOP', -50, 950]]);
 		const csv = [
-			makeTransaction({ date: '2025-01-01', amount: -50, description: 'SHOP', category: 'Home' }),
+			makeTransaction({
+				date: '2025-01-01',
+				amount: -50,
+				description: 'SHOP',
+				bankCategory: 'Home'
+			}),
 			makeTransaction({
 				date: '2025-01-04',
 				amount: -50,
 				description: 'SHOP',
-				category: 'Transport'
+				bankCategory: 'Transport'
 			})
 		];
 
-		expect(mergeStatements(statement(twice), csv).transactions[0].category).toBe('Transport');
+		expect(mergeStatements(statement(twice), csv).transactions[0].bankCategory).toBe('Transport');
 	});
 
 	it('lets identical wording beat a closer date', () => {
 		const one = account('Transaction Account', '12345678901', [['2025-01-05', 'SHOP B', -50, 950]]);
 		const csv = [
-			makeTransaction({ date: '2025-01-01', amount: -50, description: 'SHOP B', category: 'Home' }),
+			makeTransaction({
+				date: '2025-01-01',
+				amount: -50,
+				description: 'SHOP B',
+				bankCategory: 'Home'
+			}),
 			makeTransaction({
 				date: '2025-01-04',
 				amount: -50,
 				description: 'SHOP A',
-				category: 'Transport'
+				bankCategory: 'Transport'
 			})
 		];
 
-		expect(mergeStatements(statement(one), csv).transactions[0].category).toBe('Home');
+		expect(mergeStatements(statement(one), csv).transactions[0].bankCategory).toBe('Home');
 	});
 
 	it('reports PDF rows the CSV could not explain', () => {
@@ -306,7 +321,7 @@ describe('mergeStatements', () => {
 				time: '23:50:00',
 				amount: -250,
 				description: 'GROCER',
-				category: 'Food and Drink'
+				bankCategory: 'Food and Drink'
 			})
 		];
 

@@ -51,14 +51,18 @@ const DECLINED = /declin/i;
 /**
  * The fields classification looks at.
  *
- * `type` and `category` are empty for rows that came from a PDF, which has no
- * such columns; `description` is always present. Every rule below therefore
- * has to work from the description alone when it must.
+ * `bankCategory` is the bank's own broad heading rather than the sub-category
+ * this app files by: `Not for Financial Analyser` and `Fees and Interest` are
+ * stated at that level, so that is the level read here.
+ *
+ * It and `type` are empty for rows that came from a PDF, which has no such
+ * columns; `description` is always present. Every rule below therefore has to
+ * work from the description alone when it must.
  */
 export interface Classifiable {
 	readonly amount: number;
 	readonly type: string;
-	readonly category: string;
+	readonly bankCategory: string;
 	readonly description: string;
 }
 
@@ -72,19 +76,20 @@ export function normaliseCategory(category: string): string {
 
 export function isTransfer(row: Classifiable): boolean {
 	return (
-		normaliseCategory(row.category) === TRANSFER_CATEGORY ||
+		normaliseCategory(row.bankCategory) === TRANSFER_CATEGORY ||
 		TRANSFER_TYPES.has(normaliseType(row.type)) ||
 		TRANSFER_DESCRIPTIONS.some((pattern) => pattern.test(row.description))
 	);
 }
 
 export function isFee(row: Classifiable): boolean {
-	if (normaliseCategory(row.category) === FEE_CATEGORY) return true;
+	if (normaliseCategory(row.bankCategory) === FEE_CATEGORY) return true;
 	if (normaliseType(row.type) === FEE_TYPE) return true;
 
 	// Only fall back to the wording when the bank told us nothing else, so a
 	// categorised purchase from a merchant called "… Fees" stays a purchase.
-	const uncategorised = row.category === '' || normaliseCategory(row.category) === 'uncategorised';
+	const uncategorised =
+		row.bankCategory === '' || normaliseCategory(row.bankCategory) === 'uncategorised';
 	return uncategorised && FEE_DESCRIPTIONS.some((pattern) => pattern.test(row.description));
 }
 

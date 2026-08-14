@@ -35,7 +35,7 @@
 				row.transaction.description,
 				row.transaction.merchant,
 				row.transaction.category,
-				row.transaction.subCategory,
+				row.transaction.bankCategory,
 				row.transaction.counterparty,
 				row.transaction.type
 			].some((field) => field.toLowerCase().includes(needle))

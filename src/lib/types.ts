@@ -20,7 +20,7 @@ export type MonthMetric = 'net' | 'out' | 'in';
  * Where a transaction's facts came from.
  *
  * The two exports know different things: the PDF carries the running balance
- * and every account, the CSV carries the bank's categories and the time of day.
+ * and every account, the CSV carries the bank's own filing and the time of day.
  * `both` means the row was matched across the two and has everything.
  */
 export type Source = 'pdf' | 'csv' | 'both';
@@ -44,8 +44,24 @@ export interface Transaction {
 	readonly counterparty: string;
 	/** Signed, in account currency. Negative is money leaving the account. */
 	readonly amount: number;
+	/**
+	 * What this app files the transaction under: the bank's **sub**-category,
+	 * `Groceries` or `Fuel` or `Coffee`.
+	 *
+	 * The bank's broad headings are a dozen buckets nobody can act on — groceries,
+	 * restaurants and coffee are one "Food and Drink" — so the finer label is the
+	 * one every breakdown, list and export in this app means by "category".
+	 */
 	readonly category: string;
-	readonly subCategory: string;
+	/**
+	 * The heading the bank itself files that category under, `Food and Drink`.
+	 *
+	 * Kept because it, and not {@link category}, is what says a row is an
+	 * own-account transfer or a bank charge: those live at the bank's own level as
+	 * `Not for Financial Analyser` and `Fees and Interest`. Nothing on screen rolls
+	 * up by it.
+	 */
+	readonly bankCategory: string;
 	readonly note: string;
 	/** Cleaned-up merchant name derived from the description. */
 	readonly merchant: string;
@@ -125,7 +141,7 @@ export interface MonthSeries {
 	readonly isPartial: boolean;
 }
 
-/** A category, sub-category or merchant rolled up into a total. */
+/** A category or merchant rolled up into a total. */
 export interface Bucket {
 	readonly label: string;
 	/** Positive magnitude. */

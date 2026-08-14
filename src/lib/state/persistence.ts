@@ -10,7 +10,8 @@ const KEYS = {
 	anchors: 'budgy:anchors',
 	theme: 'budgy:theme',
 	files: 'budgy:files',
-	apiKey: 'budgy:anthropic-key'
+	apiKey: 'budgy:anthropic-key',
+	categories: 'budgy:subcategories'
 } as const;
 
 export type Theme = 'light' | 'dark' | 'system';
@@ -119,6 +120,34 @@ export function saveFiles(files: StoredFiles): boolean {
 }
 
 /**
+ * The categories the reader chose for merchants the bank left unfiled, keyed by
+ * merchant.
+ *
+ * The key predates the app settling on the bank's finer label as its category;
+ * the values it holds are those labels either way, so it is left alone rather
+ * than renamed into a key that once held something else.
+ *
+ *
+ * Kept without asking, unlike the statement itself: a merchant name and a
+ * category are the reader's own labelling rather than their bank's record, and
+ * the work of filing a month's stray rows is worth carrying into next month's
+ * export. Clearing the files leaves these behind, and each is removable from
+ * the card that set it.
+ */
+export function loadCategoryRules(): Record<string, string> {
+	return readJson(KEYS.categories, isCategoryRules) ?? {};
+}
+
+export function saveCategoryRules(rules: Record<string, string>): void {
+	if (Object.keys(rules).length === 0) {
+		clearKey('categories');
+		return;
+	}
+
+	writeJson(KEYS.categories, rules);
+}
+
+/**
  * The reader's own Anthropic key, when they asked for it to be kept.
  *
  * Storing a credential is a bigger ask than storing a statement, so nothing
@@ -143,6 +172,10 @@ export function saveApiKey(key: string): void {
 
 function isString(value: unknown): value is string {
 	return typeof value === 'string';
+}
+
+function isCategoryRules(value: unknown): value is Record<string, string> {
+	return typeof value === 'object' && value !== null && Object.values(value).every(isString);
 }
 
 function isAnchorMap(value: unknown): value is Record<string, Anchor> {

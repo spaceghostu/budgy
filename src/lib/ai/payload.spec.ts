@@ -27,12 +27,22 @@ describe('buildAiPayload', () => {
 		resetTransactionIds();
 		const payload = buildAiPayload(
 			insightsFor([
-				makeTransaction({ date: '2026-01-02', amount: -100, category: 'Food', merchant: 'Shop' }),
-				makeTransaction({ date: '2026-01-03', amount: -900, category: 'Home', merchant: 'Rent' })
+				makeTransaction({
+					date: '2026-01-02',
+					amount: -100,
+					category: 'Coffee',
+					merchant: 'Shop'
+				}),
+				makeTransaction({
+					date: '2026-01-03',
+					amount: -900,
+					category: 'Levies',
+					merchant: 'Rent'
+				})
 			])
 		);
 
-		expect(payload.categories.map((bucket) => bucket.label)).toEqual(['Home', 'Food']);
+		expect(payload.categories.map((bucket) => bucket.label)).toEqual(['Levies', 'Coffee']);
 		expect(payload.merchants[0]).toMatchObject({ label: 'Rent', total: 900, count: 1 });
 	});
 
@@ -40,8 +50,8 @@ describe('buildAiPayload', () => {
 		resetTransactionIds();
 		const payload = buildAiPayload(
 			insightsFor([
-				makeTransaction({ date: '2026-01-02', amount: -100, category: 'Food' }),
-				makeTransaction({ date: '2026-01-03', amount: -200, category: 'Home' })
+				makeTransaction({ date: '2026-01-02', amount: -100, category: 'Coffee' }),
+				makeTransaction({ date: '2026-01-03', amount: -200, category: 'Levies' })
 			])
 		);
 
@@ -89,7 +99,7 @@ describe('buildAiPayload', () => {
 					amount: -199,
 					type: 'Debit order',
 					merchant: 'Gym',
-					category: 'Health'
+					category: 'Sport and Fitness'
 				})
 			])
 		);
@@ -97,7 +107,7 @@ describe('buildAiPayload', () => {
 		expect(payload.recurring).toEqual([
 			{
 				merchant: 'Gym',
-				category: 'Health',
+				category: 'Sport and Fitness',
 				monthlyAmount: 199,
 				months: 1,
 				isDebitOrder: true
@@ -113,7 +123,7 @@ describe('buildAiPayload', () => {
 					date: '2026-01-05',
 					amount: -1200,
 					merchant: 'Airline',
-					category: 'Travel',
+					category: 'Flights',
 					description: 'CARD 1234 REF 998877 AIRLINE',
 					note: 'private note',
 					counterparty: 'Someone',
@@ -123,7 +133,7 @@ describe('buildAiPayload', () => {
 		);
 
 		expect(payload.largestExpenses).toEqual([
-			{ date: '2026-01-05', merchant: 'Airline', category: 'Travel', amount: 1200 }
+			{ date: '2026-01-05', merchant: 'Airline', category: 'Flights', amount: 1200 }
 		]);
 	});
 

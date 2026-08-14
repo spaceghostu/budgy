@@ -58,6 +58,14 @@ const CHEQUE = account('Transaction Account', '12345678901', [
 	['2026-08-09', 'GROCER', -100, 0]
 ]);
 
+/** The same export with the oldest row missing, so one PDF line goes unmatched. */
+const PARTIAL_CSV = [
+	HEADER,
+	row('2026-08-09', -100, 'GROCER'),
+	row('2026-08-01', -200, 'FUEL'),
+	row('2026-07-15', -300, 'RENT')
+].join('\n');
+
 function csvFile(text = CSV, name = 'export.csv'): File {
 	return new File([text], name, { type: 'text/csv' });
 }
@@ -158,9 +166,12 @@ describe('StatementState', () => {
 		await state.loadFile(csvFile());
 
 		expect(state.matched).toBe(4);
-		expect(state.visible.every((transaction) => transaction.category === 'Food and Drink')).toBe(
-			true
-		);
+		expect(
+			state.visible.every(
+				(transaction) =>
+					transaction.category === 'Groceries' && transaction.bankCategory === 'Food and Drink'
+			)
+		).toBe(true);
 		// …without giving up the balances.
 		expect(state.visible.map((transaction) => transaction.balance)).toEqual([600, 300, 100, 0]);
 	});
@@ -412,5 +423,175 @@ describe('StatementState', () => {
 		expect(state.hasStatement).toBe(false);
 		expect(state.csvName).toBe('');
 		expect(localStorage.getItem('budgy:files')).toBeNull();
+	});
+});
+
+describe('filing what the bank left unfiled', () => {
+	it('lists what has no category, by merchant, heaviest first', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		expect(state.uncategorised.map((group) => group.merchant)).toEqual([
+			'GYM',
+			'RENT',
+			'FUEL',
+			'GROCER'
+		]);
+	});
+
+	it('has nothing to ask about once the bank has filed every row', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+
+		expect(state.uncategorised).toEqual([]);
+	});
+
+	it('offers the categories this statement already uses', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+
+		expect(state.categoryOptions).toContain('Groceries');
+		expect(state.categoryOptions).not.toContain('Uncategorised');
+	});
+
+	it('moves a merchant’s spending into the category it is given', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'Sport and Fitness');
+
+		expect(
+			state.insights.categories.find((bucket) => bucket.label === 'Sport and Fitness')?.total
+		).toBe(400);
+		expect(state.uncategorised.map((group) => group.merchant)).not.toContain('GYM');
+	});
+
+	it('gives the row the bank heading its new category sits under', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'Sport and Fitness');
+
+		expect(state.visible[0].bankCategory).toBe('Recreation');
+	});
+
+	it('says how much of the statement each choice covers', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'Sport and Fitness');
+
+		expect(state.appliedRules).toEqual([
+			{ merchant: 'GYM', category: 'Sport and Fitness', count: 1 }
+		]);
+	});
+
+	it('takes the choice back off again', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'Sport and Fitness');
+		state.setCategory('GYM', '');
+
+		expect(state.appliedRules).toEqual([]);
+		expect(state.uncategorised.map((group) => group.merchant)).toContain('GYM');
+	});
+
+	it('leaves the bank’s own filing alone', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+
+		state.setCategory('GROCER', 'Coffee');
+
+		expect(state.visible.every((transaction) => transaction.category === 'Groceries')).toBe(true);
+	});
+
+	it('still applies to a PDF row the CSV had no match for', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+		await state.loadFile(csvFile(PARTIAL_CSV));
+
+		state.setCategory('GYM', 'Sport and Fitness');
+
+		expect(state.insights.categories.map((bucket) => bucket.label)).toEqual([
+			'Groceries',
+			'Sport and Fitness'
+		]);
+	});
+
+	it('stops counting a merchant as spending once it is filed as a transfer', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'Transfers');
+
+		expect(state.insights.summary.expense).toBe(600);
+	});
+
+	it('remembers the choices for the next visit', async () => {
+		const first = new StatementState();
+		await first.loadFile(pdfFile());
+		first.setCategory('GYM', 'Sport and Fitness');
+
+		const second = new StatementState();
+		await second.loadFile(pdfFile());
+
+		expect(second.visible.map((transaction) => transaction.category)).toEqual([
+			'Sport and Fitness',
+			'Uncategorised',
+			'Uncategorised',
+			'Uncategorised'
+		]);
+	});
+
+	it('takes a category of the reader’s own, and keeps offering it', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'School fees');
+
+		expect(state.insights.categories.map((bucket) => bucket.label)).toContain('School fees');
+		expect(state.categoryOptions).toContain('School fees');
+	});
+
+	it('keeps offering one made for a merchant this statement does not mention', async () => {
+		const first = new StatementState();
+		await first.loadFile(pdfFile());
+		first.setCategory('SOMEWHERE ELSE', 'School fees');
+
+		const second = new StatementState();
+		await second.loadFile(pdfFile());
+
+		expect(second.categoryOptions).toContain('School fees');
+	});
+
+	it('files a new name under the existing category when it is already there', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'sport and fitness');
+
+		expect(state.appliedRules).toEqual([
+			{ merchant: 'GYM', category: 'Sport and Fitness', count: 1 }
+		]);
+	});
+
+	it('refuses a name that would file a row as what it already is', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'Uncategorised');
+
+		expect(state.appliedRules).toEqual([]);
+	});
+
+	it('keeps them when the files are cleared, since they outlive one statement', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+		state.setCategory('GYM', 'Sport and Fitness');
+
+		state.clear();
+
+		expect(state.categoryRules).toEqual({ GYM: 'Sport and Fitness' });
 	});
 });
