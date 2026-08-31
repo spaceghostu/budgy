@@ -1,0 +1,54 @@
+# Packaging the desktop app.
+#
+# `directories.buildResources` is moved off its default, which is literally
+# `build/` — the directory `adapter-static` writes the app into. Left alone,
+# electron-builder would treat the bundle as its own icon-and-installer
+# scratch space. The directory it points at need not exist, and does not: it is
+# where an `icon.png` would go when there is an app icon to put there. Until
+# then the builds carry Electron's own.
+#
+# `files` is the whole app: the shell in `electron/`, the bundle in `build/`,
+# and the manifest that names the entry point. `node_modules` is deliberately
+# not among them — Vite has already bundled papaparse and pdf.js into `build/`,
+# so shipping the packages again would be the same code twice.
+appId: za.co.developerhut.budgy
+productName: Budgy
+copyright: Budgy
+
+directories:
+  buildResources: electron/resources
+  output: dist-desktop
+
+files:
+  - package.json
+  - electron/**/*
+  - '!electron/**/*.spec.js'
+  - build/**/*
+  - '!node_modules'
+
+# Statements are read in the window and never sent anywhere; there is no update
+# server to point at, and an unconfigured one is worse than none.
+publish: null
+
+linux:
+  target: AppImage
+  category: Office
+
+win:
+  target: nsis
+  # There is no code-signing certificate here, so the signing pass had nothing to
+  # produce. Off, it is skipped; the icon and version metadata are still written
+  # into the exe, which is what `signAndEditExecutable: false` would have thrown
+  # away as well. What is missing is a signature, which an unsigned build was
+  # never going to carry either way: Windows shows SmartScreen the first time a
+  # reader runs it. Set this back when there is a certificate to name.
+  #
+  # Off it also keeps a Linux build from shelling out to a Windows
+  # `signtool.exe` through Wine, though that alone does not make one possible —
+  # NSIS builds the uninstaller by running the stub it just compiled, so a build
+  # anywhere but Windows needs Wine regardless. This one was made on Windows.
+  signExecutable: false
+
+mac:
+  target: dmg
+  category: public.app-category.finance

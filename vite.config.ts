@@ -56,7 +56,9 @@ export default defineConfig(({ mode }) => ({
 				test: {
 					name: 'server',
 					environment: 'node',
-					include: ['src/**/*.{test,spec}.{js,ts}'],
+					// `electron/` is the desktop shell: its pure modules are specced here
+					// alongside the app's, and run in the same node project.
+					include: ['src/**/*.{test,spec}.{js,ts}', 'electron/**/*.{test,spec}.js'],
 					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
 				}
 			}
