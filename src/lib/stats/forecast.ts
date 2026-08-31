@@ -178,6 +178,14 @@ export interface ForecastPoint {
 }
 
 /** The month ahead, as far as the history can see it. */
+/** One category's slice of the everyday channel. */
+export interface CategoryShare {
+	/** The bank's sub-category, as every other breakdown in this app means it. */
+	readonly category: string;
+	/** Fraction of the everyday figure, between 0 and 1. */
+	readonly share: number;
+}
+
 export interface Forecast {
 	/** `YYYY-MM` cycle being forecast. Blank when there is no statement. */
 	readonly month: string;
@@ -240,6 +248,28 @@ export interface Forecast {
 	 * that the line it has is narrower than the month.
 	 */
 	readonly everyday: number;
+	/**
+	 * Where the everyday figure is expected to go, as fractions of it.
+	 *
+	 * The everyday channel is one number because nobody can say which Tuesday
+	 * the groceries happen — but a reader asking what is left to spend is asking
+	 * it of groceries and fuel and coffee separately, and the history does know
+	 * that much. Each entry is one category's share of the untracked spending in
+	 * the same tails {@link everyday} is the median of.
+	 *
+	 * Fractions rather than amounts so the caller multiplies by the figure it is
+	 * actually drawing: {@link Runway} reads the everyday channel as a magnitude,
+	 * and a share applied to that is money out. They sum to 1, heaviest first,
+	 * and the list is empty wherever {@link everyday} is zero — a month with no
+	 * tails to learn from has no shares to divide.
+	 *
+	 * Learned from the **expense** rows in those tails alone. The tails
+	 * themselves are net on a net forecast, so a stray refund belongs in the
+	 * median it moves; but "still to be spent by category" is a one-sided
+	 * question, and a category that is net positive over the window would take a
+	 * negative share of the spending — which is not a reading, it is an artefact.
+	 */
+	readonly everydayShares: readonly CategoryShare[];
 	/** Complete past cycles the projection was learned from. */
 	readonly monthsOfHistory: number;
 	/**
@@ -506,11 +536,15 @@ export function buildForecast(
 	// No tails means no everyday channel: the median and the edges of an empty
 	// series are zero, so the line, the band and the closing figure all fall
 	// back to the committed charges alone without a second path through here.
-	const tails =
+	// Kept as rows rather than summed away: the median below needs one total per
+	// cycle, but the per-category shares need the rows those totals are made of,
+	// and re-filtering them a second time is how the two come to disagree about
+	// which spending is "everyday".
+	const tailRows =
 		isComplete || options.everyday === false
 			? []
 			: cycles.map((cycle) =>
-					tailTotal(history, {
+					tailTransactions(history, {
 						cycle,
 						start,
 						after: elapsedDays,
@@ -518,11 +552,19 @@ export function buildForecast(
 						skip: isCommitted
 					})
 				);
+	const tails = tailRows.map((rows) =>
+		sum(rows.map((transaction) => flowAmount(transaction, metric)))
+	);
 
 	const actual = sum(inCycle.map((transaction) => flowAmount(transaction, metric)));
 	const committed = sum(counted(expected).map((payment) => paymentAmount(payment, metric)));
 	const everyday = median(tails);
 	const [low, high] = edges(tails);
+	// Pooled across the window's cycles rather than averaged per cycle: the
+	// shares describe where the untracked spending goes over the window as a
+	// whole, and a category that appeared in one month of six should weigh as
+	// the one month it was.
+	const everydayShares = everyday === 0 ? [] : categoryShares(tailRows.flat());
 
 	return {
 		month,
@@ -552,6 +594,7 @@ export function buildForecast(
 		candidateMonths: offerable,
 		committed: round(committed),
 		everyday: round(everyday),
+		everydayShares,
 		monthsOfHistory: cycles.length,
 		monthsAvailable: available.length,
 		window,
@@ -575,6 +618,7 @@ function emptyForecast(metric: MonthMetric, window: ForecastWindow): Forecast {
 		candidateMonths: [],
 		committed: 0,
 		everyday: 0,
+		everydayShares: [],
 		monthsOfHistory: 0,
 		monthsAvailable: 0,
 		window,
@@ -928,24 +972,51 @@ interface TailQuery {
 }
 
 /**
- * What one past cycle did over the days this month has left.
+ * The rows one past cycle put through the days this month has left.
  *
  * The same tail rather than the whole month, so a reader looking at the 25th is
  * told what the last few days usually cost rather than what a month costs. A
  * cycle shorter than this one simply has no rows in the days past its end, which
  * is the honest answer for it.
  */
-function tailTotal(history: readonly Transaction[], query: TailQuery): number {
-	return sum(
-		history
-			.filter(
-				(transaction) =>
-					cycleOf(transaction.date, query.start) === query.cycle &&
-					cycleDay(transaction.date, query.start) > query.after &&
-					!query.skip(transaction)
-			)
-			.map((transaction) => flowAmount(transaction, query.metric))
+function tailTransactions(
+	history: readonly Transaction[],
+	query: TailQuery
+): readonly Transaction[] {
+	return history.filter(
+		(transaction) =>
+			cycleOf(transaction.date, query.start) === query.cycle &&
+			cycleDay(transaction.date, query.start) > query.after &&
+			!query.skip(transaction)
 	);
+}
+
+/**
+ * How the untracked spending in those tails divides by category.
+ *
+ * Shares of the spending rather than of the net, for the reason on
+ * {@link Forecast.everydayShares}: a category the window happened to refund more
+ * than it charged would otherwise take a negative slice of a positive figure.
+ * Income rows are simply not part of the question being asked.
+ *
+ * Sums to exactly 1 where anything was spent, so a caller apportioning a figure
+ * by these shares gets that figure back. Empty where nothing was.
+ */
+function categoryShares(rows: readonly Transaction[]): readonly CategoryShare[] {
+	const totals = new Map<string, number>();
+	for (const transaction of rows) {
+		if (transaction.flow !== 'expense') continue;
+
+		const spent = Math.abs(transaction.amount);
+		totals.set(transaction.category, (totals.get(transaction.category) ?? 0) + spent);
+	}
+
+	const total = sum([...totals.values()]);
+	if (total === 0) return [];
+
+	return [...totals]
+		.map(([category, spent]) => ({ category, share: spent / total }))
+		.sort((a, b) => b.share - a.share || a.category.localeCompare(b.category));
 }
 
 interface LineInput {

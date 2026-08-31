@@ -226,3 +226,106 @@ describe('buildRunway', () => {
 		expect(runway.shortfall).toBeNull();
 	});
 });
+
+describe('byCategory', () => {
+	/**
+	 * The shared statement, filed. {@link makeTransaction} files everything under
+	 * one category by default, which is fine for figures and useless for a
+	 * breakdown — so the merchants here each carry their own.
+	 */
+	function filed(extra: readonly Transaction[] = []): readonly Transaction[] {
+		return statement()
+			.map((transaction) =>
+				transaction.merchant === 'Gym'
+					? { ...transaction, category: 'Gym' }
+					: transaction.merchant === 'Cafe'
+						? { ...transaction, category: 'Coffee' }
+						: transaction
+			)
+			.concat(extra);
+	}
+
+	it('adds up to exactly what is still to leave', () => {
+		// The one property that matters: the rows are the same money as the figure
+		// the page shows above them. Cents lost to rounding here would be a small
+		// lie that costs the reader their trust in the big numbers.
+		const runway = buildRunway(forecastOf(), { balance: 5000 });
+		const total = runway.byCategory.reduce((running, row) => running + row.total, 0);
+
+		expect(round(total)).toBe(round(runway.committedOut + runway.everyday));
+	});
+
+	it('keeps the named charges and the everyday drift apart on a row', () => {
+		const runway = buildRunway(forecastOf(filed()), { balance: 5000 });
+		const gym = runway.byCategory.find((row) => row.category === 'Gym');
+
+		// The gym is a debit order landing on the 10th for 300 — money with a date
+		// on it, and nothing the everyday channel has any business guessing at.
+		expect(gym?.named).toBe(300);
+		expect(gym?.everyday).toBe(0);
+		expect(gym?.count).toBe(1);
+	});
+
+	it('sums a category that has both into one row', () => {
+		// A named charge and untracked spending under the same heading are one
+		// answer to "what is this costing me", not two.
+		// The corner shop swings too far to be called recurring, so it stays in the
+		// everyday channel — which is the point: it has to reach the Gym row as
+		// drift rather than as a second named charge.
+		const both = filed([
+			makeTransaction({ date: '2026-05-12', amount: -40, merchant: 'Corner', category: 'Gym' }),
+			makeTransaction({ date: '2026-06-12', amount: -95, merchant: 'Corner', category: 'Gym' })
+		]);
+		const runway = buildRunway(forecastOf(both), { balance: 5000 });
+		const gym = runway.byCategory.find((row) => row.category === 'Gym');
+
+		expect(gym?.named).toBe(300);
+		expect(gym?.everyday).toBeGreaterThan(0);
+		expect(gym?.total).toBe(round((gym?.named ?? 0) + (gym?.everyday ?? 0)));
+	});
+
+	it('leaves money still expected in out of it', () => {
+		// A salary is not something a category has left to spend, and listing it
+		// here would invite exactly the wrong arithmetic.
+		const paid = filed(
+			['05', '06'].map((month) =>
+				makeTransaction({
+					date: `2026-${month}-25`,
+					amount: 9000,
+					merchant: 'Employer',
+					category: 'Salary',
+					type: 'Debit order'
+				})
+			)
+		);
+		const runway = buildRunway(forecastOf(paid), { balance: 5000 });
+
+		expect(runway.committedIn).toBeGreaterThan(0);
+		expect(runway.byCategory.map((row) => row.category)).not.toContain('Salary');
+	});
+
+	it('is heaviest first, with a share of the whole', () => {
+		const runway = buildRunway(forecastOf(), { balance: 5000 });
+		const totals = runway.byCategory.map((row) => row.total);
+
+		expect(totals).toEqual([...totals].sort((a, b) => b - a));
+		expect(runway.byCategory.reduce((running, row) => running + row.share, 0)).toBeCloseTo(1, 10);
+	});
+
+	it('names the categories alone when the everyday channel is not counted', () => {
+		const runway = buildRunway(forecastOf(filed(), { everyday: false }), { balance: 5000 });
+
+		expect(runway.everyday).toBe(0);
+		for (const row of runway.byCategory) expect(row.everyday).toBe(0);
+		expect(runway.byCategory.map((row) => row.category)).toEqual(['Gym']);
+	});
+
+	it('has nothing to split without a statement', () => {
+		expect(buildRunway(forecastOf([]), { balance: 0 }).byCategory).toEqual([]);
+	});
+});
+
+/** Money is decimal; the assertions above compare cents, not floats. */
+function round(value: number): number {
+	return Math.round((value + Number.EPSILON) * 100) / 100;
+}

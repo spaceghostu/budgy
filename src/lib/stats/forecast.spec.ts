@@ -838,3 +838,103 @@ describe('listPayees', () => {
 		expect(listPayees([])).toEqual([]);
 	});
 });
+
+describe('everydayShares', () => {
+	/**
+	 * Two whole months of untracked spending across two categories, then a month
+	 * in progress. Neither merchant holds still enough to be called recurring, so
+	 * both stay in the everyday channel where the shares are learned.
+	 */
+	function spread(extra: readonly Transaction[] = []): readonly Transaction[] {
+		return [
+			// Each whole month opens on its first day, or the older one is dropped as
+			// partial. Everything the shares are learned from sits past the 2nd —
+			// the day the month in progress stops — since that is the tail the
+			// forecast reads.
+			makeTransaction({ date: '2026-05-01', amount: -10, merchant: 'Open', category: 'Fees' }),
+			makeTransaction({
+				date: '2026-05-15',
+				amount: -100,
+				merchant: 'Shop',
+				category: 'Groceries'
+			}),
+			makeTransaction({ date: '2026-05-20', amount: -60, merchant: 'Cafe', category: 'Coffee' }),
+
+			makeTransaction({ date: '2026-06-01', amount: -10, merchant: 'Open', category: 'Fees' }),
+			makeTransaction({
+				date: '2026-06-15',
+				amount: -140,
+				merchant: 'Shop',
+				category: 'Groceries'
+			}),
+			makeTransaction({ date: '2026-06-20', amount: -100, merchant: 'Cafe', category: 'Coffee' }),
+
+			makeTransaction({ date: '2026-07-02', amount: -50, merchant: 'Shop', category: 'Groceries' }),
+			...extra
+		];
+	}
+
+	it('divides the everyday figure by where the history spent it', () => {
+		const forecast = buildForecast(spread(), { metric: 'net' });
+		const shares = Object.fromEntries(
+			forecast.everydayShares.map((row) => [row.category, row.share])
+		);
+
+		// Past the 2nd, the two whole months left 160 on coffee and 240 on
+		// groceries — so groceries takes the larger slice of what is still to go.
+		expect(shares.Groceries).toBeCloseTo(240 / 400, 10);
+		expect(shares.Coffee).toBeCloseTo(160 / 400, 10);
+	});
+
+	it('sums to one, heaviest first', () => {
+		const forecast = buildForecast(spread(), { metric: 'net' });
+
+		const total = forecast.everydayShares.reduce((running, row) => running + row.share, 0);
+
+		expect(total).toBeCloseTo(1, 10);
+		expect(forecast.everydayShares.map((row) => row.category)).toEqual(['Groceries', 'Coffee']);
+	});
+
+	it('leaves out the charges the committed channel already names', () => {
+		// The gym is a debit order, so it is a named charge — counting it here as
+		// well would forecast the same money twice, once by name and once by
+		// average.
+		const withGym = spread([
+			makeTransaction({
+				date: '2026-05-10',
+				amount: -300,
+				merchant: 'Gym',
+				category: 'Gym',
+				type: 'Debit order'
+			}),
+			makeTransaction({
+				date: '2026-06-10',
+				amount: -300,
+				merchant: 'Gym',
+				category: 'Gym',
+				type: 'Debit order'
+			})
+		]);
+		const forecast = buildForecast(withGym, { metric: 'net' });
+
+		expect(forecast.everydayShares.map((row) => row.category)).not.toContain('Gym');
+	});
+
+	it('reads the spending alone, so a refund cannot take a negative slice', () => {
+		// A category refunded more than it charged is net positive over the window.
+		// That belongs in the median it moves, but not in a list of what is left to
+		// spend — a negative share is an artefact, not a reading.
+		const refunded = spread([
+			makeTransaction({ date: '2026-05-21', amount: 500, merchant: 'Cafe', category: 'Coffee' })
+		]);
+		const forecast = buildForecast(refunded, { metric: 'net' });
+
+		for (const row of forecast.everydayShares) expect(row.share).toBeGreaterThan(0);
+	});
+
+	it('has no shares where it has no everyday figure', () => {
+		// Asked for the named charges alone, there is no everyday channel to divide.
+		expect(buildForecast(spread(), { metric: 'net', everyday: false }).everydayShares).toEqual([]);
+		expect(buildForecast([], { metric: 'net' }).everydayShares).toEqual([]);
+	});
+});

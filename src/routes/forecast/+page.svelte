@@ -1,5 +1,7 @@
 <script lang="ts">
 	import AddCharge from '$lib/components/AddCharge.svelte';
+	import CategoryOutlookList from '$lib/components/CategoryOutlookList.svelte';
+	import CategoryOutlookTable from '$lib/components/CategoryOutlookTable.svelte';
 	import ChartCard from '$lib/components/ChartCard.svelte';
 	import ExpectedPayments from '$lib/components/ExpectedPayments.svelte';
 	import MonthStartPicker from '$lib/components/MonthStartPicker.svelte';
@@ -206,6 +208,17 @@
 			: `Charges the last ${formatCount(forecast.monthsOfHistory, 'complete month')} name, on the days they usually land — add anything the test missed`
 	);
 
+	/**
+	 * What the category breakdown is counting, said before the reader reads the
+	 * figures — the same distinction the tiles and the headline make, because
+	 * this card is the one most likely to be read as a budget.
+	 */
+	const outlookSubtitle = $derived(
+		everydayOn
+			? `What each category still has to take before ${formatDate(runway.payday)} — named charges, plus what the history says the rest usually costs`
+			: `Named charges only, by category — the everyday spending is not counted`
+	);
+
 	/** Whole days from the statement's last day to a date on the line. */
 	function daysUntil(date: string): number {
 		const from = Date.parse(`${date}T00:00:00Z`);
@@ -352,6 +365,15 @@
 		{/snippet}
 		{#snippet table()}
 			<RunwayTable {runway} />
+		{/snippet}
+	</ChartCard>
+
+	<ChartCard title="Still to spend by category" subtitle={outlookSubtitle}>
+		{#snippet chart()}
+			<CategoryOutlookList rows={runway.byCategory} {everydayOn} />
+		{/snippet}
+		{#snippet table()}
+			<CategoryOutlookTable rows={runway.byCategory} {everydayOn} />
 		{/snippet}
 	</ChartCard>
 

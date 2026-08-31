@@ -28,7 +28,7 @@
  */
 
 import { cycleClosing, cycleDate, cycleOpening, nextCycle, CALENDAR_START } from './cycle.ts';
-import { counted, type ExpectedPayment, type Forecast } from './forecast.ts';
+import { counted, type CategoryShare, type ExpectedPayment, type Forecast } from './forecast.ts';
 
 /** One day between now and payday. */
 export interface RunwayDay {
@@ -48,6 +48,31 @@ export interface RunwayDay {
 	readonly payments: readonly ExpectedPayment[];
 	/** False on the opening day alone — that one is the bank's own figure. */
 	readonly isProjected: boolean;
+}
+
+/**
+ * What one category still has to take before payday.
+ *
+ * The two channels are kept apart here for the same reason the forecast keeps
+ * them apart: they are known to very different standards. {@link named} is money
+ * with a date and a payee on it, and {@link everyday} is this category's share
+ * of what the rest of the month usually costs — a reasonable expectation, not an
+ * appointment. A reader deciding whether to spend on groceries this week is
+ * owed the difference between the two.
+ */
+export interface CategoryOutlook {
+	/** The bank's sub-category, as every other breakdown in this app means it. */
+	readonly category: string;
+	/** Positive. Named charges still to come, from {@link Runway.payments}. */
+	readonly named: number;
+	/** Positive. This category's slice of {@link Runway.everyday}. */
+	readonly everyday: number;
+	/** Positive. `named + everyday` — what the category has left to take. */
+	readonly total: number;
+	/** How many named charges are behind {@link named}. */
+	readonly count: number;
+	/** {@link total} as a fraction of everything still to leave. */
+	readonly share: number;
 }
 
 /** The stretch between the last thing that happened and the next payday. */
@@ -93,6 +118,20 @@ export interface Runway {
 	 * groceries and the coffees nobody can put a date on.
 	 */
 	readonly everyday: number;
+	/**
+	 * What is still to leave, split by category — heaviest first.
+	 *
+	 * The same money as `committedOut + everyday` and no other: the named half is
+	 * {@link payments} grouped by category, the everyday half is
+	 * {@link everyday} apportioned by the shares the forecast learned. So the
+	 * rows add up to the figure the page shows above them, which is the whole
+	 * point of computing it here rather than beside it.
+	 *
+	 * Spending only. Money still expected *in* is not something a category has
+	 * left to spend, and a salary sitting in this list under `Income` would
+	 * invite exactly the wrong arithmetic.
+	 */
+	readonly byCategory: readonly CategoryOutlook[];
 	/** Complete past cycles the projection was learned from. */
 	readonly monthsOfHistory: number;
 	/** True when the cycle is over: there is nothing left to project. */
@@ -175,6 +214,7 @@ export function buildRunway(forecast: Forecast, options: RunwayOptions): Runway 
 		// Reported as a magnitude, like every other figure a reader reads: on a
 		// net forecast the everyday channel is spending, and so is negative.
 		everyday: round(Math.abs(forecast.everyday)),
+		byCategory: byCategory(payments, round(Math.abs(forecast.everyday)), forecast.everydayShares),
 		monthsOfHistory: forecast.monthsOfHistory,
 		isComplete: forecast.isComplete,
 		isEmpty: false
@@ -209,10 +249,95 @@ function emptyRunway(opening: number): Runway {
 		committedOut: 0,
 		committedIn: 0,
 		everyday: 0,
+		byCategory: [],
 		monthsOfHistory: 0,
 		isComplete: false,
 		isEmpty: true
 	};
+}
+
+/**
+ * Split what is still to leave across the categories it will leave through.
+ *
+ * Both channels land in the same row where a category has both — a Netflix debit
+ * order and the odd cinema ticket are one answer to "what is entertainment still
+ * costing me", not two — but each keeps its own figure on the row, because one
+ * is a date in the diary and the other is a habit.
+ *
+ * The everyday figure is apportioned rather than re-learned per category. A
+ * per-category median would not sum to the median of the whole, and the rows
+ * would then quietly disagree with the total the page shows above them; shares
+ * of the one figure reconcile by construction. See
+ * {@link Forecast.everydayShares}.
+ */
+function byCategory(
+	payments: readonly ExpectedPayment[],
+	everyday: number,
+	shares: readonly CategoryShare[]
+): readonly CategoryOutlook[] {
+	const named = new Map<string, { total: number; count: number }>();
+	for (const payment of payments) {
+		if (payment.flow !== 'expense') continue;
+
+		const row = named.get(payment.category) ?? { total: 0, count: 0 };
+		named.set(payment.category, { total: row.total + payment.amount, count: row.count + 1 });
+	}
+
+	const apportioned = apportion(everyday, shares);
+	const categories = new Set([...named.keys(), ...apportioned.keys()]);
+
+	const rows = [...categories].map((category) => {
+		const own = named.get(category) ?? { total: 0, count: 0 };
+		const drift = apportioned.get(category) ?? 0;
+
+		return {
+			category,
+			named: round(own.total),
+			everyday: drift,
+			total: round(own.total + drift),
+			count: own.count,
+			// Filled in below, once there is a total to take a share of.
+			share: 0
+		};
+	});
+
+	const total = rows.reduce((running, row) => running + row.total, 0);
+
+	return rows
+		.filter((row) => row.total !== 0)
+		.map((row) => ({ ...row, share: total === 0 ? 0 : row.total / total }))
+		.sort((a, b) => b.total - a.total || a.category.localeCompare(b.category));
+}
+
+/**
+ * Divide one figure by share, to the cent, without losing a cent.
+ *
+ * Rounding each slice on its own leaves the parts a few cents off the whole,
+ * which is exactly the kind of small lie that makes a reader stop trusting the
+ * big numbers. So the remainder after rounding down is handed out one cent at a
+ * time, largest fractional part first — the standard largest-remainder
+ * apportionment — and the slices add back to the figure exactly.
+ */
+function apportion(total: number, shares: readonly CategoryShare[]): ReadonlyMap<string, number> {
+	if (total === 0 || shares.length === 0) return new Map();
+
+	const cents = Math.round(total * 100);
+	const exact = shares.map((share) => ({ category: share.category, value: share.share * cents }));
+	const floors = exact.map((slice) => ({ ...slice, floor: Math.floor(slice.value) }));
+
+	const spare = cents - floors.reduce((running, slice) => running + slice.floor, 0);
+	// Ties broken by name, so the same input always divides the same way.
+	const order = [...floors].sort(
+		(a, b) => b.value - b.floor - (a.value - a.floor) || a.category.localeCompare(b.category)
+	);
+	const topped = new Set(order.slice(0, Math.max(spare, 0)).map((slice) => slice.category));
+
+	return new Map(
+		floors.map((slice) => [
+			slice.category,
+			(slice.floor + (topped.has(slice.category) ? 1 : 0)) / 100
+		])
+	);
 }
 
 function sum(payments: readonly ExpectedPayment[], flow: 'income' | 'expense'): number {
