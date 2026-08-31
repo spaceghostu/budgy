@@ -1,0 +1,25 @@
+# Line endings, settled here rather than left to each machine's git config.
+#
+# Without this, a checkout on Windows converts every text file to CRLF, and
+# Prettier — which is configured for LF and is right to be, since that is what
+# the repository holds — then reports every one of them as misformatted. That
+# turns the Windows half of the release build into a failure about nothing.
+#
+# `text=auto eol=lf` normalises on the way in and checks out LF everywhere, so
+# the working tree matches the repository on every platform.
+* text=auto eol=lf
+
+# Binaries git must not touch. It guesses well, but a corrupted icon or font
+# discovered at package time is a guess not worth relying on.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.avif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.wasm binary

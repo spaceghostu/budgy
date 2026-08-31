@@ -47,6 +47,19 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # The `client` test project runs the Svelte component specs in a real
+      # Chromium through Playwright, and a runner has no browser until one is
+      # fetched. Only chromium, because that is the only instance configured.
+      #
+      # `--with-deps` is Linux-only — it apt-installs the shared libraries a
+      # headless Chromium needs, which the Windows runner neither needs nor
+      # understands.
+      - name: Install the test browser
+        run: bunx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
+
+      # The same three commands a local check runs. A release that has not been
+      # linted, typechecked and tested is not one worth publishing, and this is
+      # the last place it is cheap to find out.
       - name: Check
         run: |
           bun run lint
