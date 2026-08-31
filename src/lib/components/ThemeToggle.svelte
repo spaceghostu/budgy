@@ -1,10 +1,15 @@
 <script lang="ts">
+	import MonitorIcon from '@lucide/svelte/icons/monitor';
+	import MoonIcon from '@lucide/svelte/icons/moon';
+	import SunIcon from '@lucide/svelte/icons/sun';
+	import type { Component } from 'svelte';
+	import { ToggleGroup, ToggleGroupItem } from '$lib/components/ui/toggle-group/index.js';
 	import { loadTheme, saveTheme, type Theme } from '../state/persistence.ts';
 
-	const OPTIONS: readonly { id: Theme; label: string; symbol: string }[] = [
-		{ id: 'light', label: 'Light', symbol: '☀' },
-		{ id: 'dark', label: 'Dark', symbol: '☾' },
-		{ id: 'system', label: 'System', symbol: '◐' }
+	const OPTIONS: readonly { id: Theme; label: string; icon: Component }[] = [
+		{ id: 'light', label: 'Light', icon: SunIcon },
+		{ id: 'dark', label: 'Dark', icon: MoonIcon },
+		{ id: 'system', label: 'System', icon: MonitorIcon }
 	];
 
 	// The app renders client-side only, so storage is available at init.
@@ -25,50 +30,21 @@
 	}
 </script>
 
-<div class="toggle" role="group" aria-label="Colour theme">
+<ToggleGroup
+	type="single"
+	variant="outline"
+	size="sm"
+	aria-label="Colour theme"
+	value={theme}
+	onValueChange={(next) => {
+		// There is always a theme in force, so the group cannot be emptied.
+		if (next) choose(next as Theme);
+	}}
+>
 	{#each OPTIONS as option (option.id)}
-		<button
-			type="button"
-			title={option.label}
-			aria-label={option.label}
-			aria-pressed={theme === option.id}
-			class:selected={theme === option.id}
-			onclick={() => choose(option.id)}
-		>
-			<span aria-hidden="true">{option.symbol}</span>
-		</button>
+		{@const Icon = option.icon}
+		<ToggleGroupItem value={option.id} title={option.label} aria-label={option.label}>
+			<Icon aria-hidden="true" />
+		</ToggleGroupItem>
 	{/each}
-</div>
-
-<style>
-	.toggle {
-		display: inline-flex;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		overflow: hidden;
-		background: var(--surface-1);
-	}
-
-	button {
-		border: 0;
-		background: transparent;
-		padding: 5px 9px;
-		font-size: 13px;
-		line-height: 1;
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-
-	button + button {
-		border-left: 1px solid var(--border);
-	}
-
-	button:hover {
-		background: var(--surface-2);
-	}
-
-	button.selected {
-		background: var(--surface-2);
-		color: var(--text-primary);
-	}
-</style>
+</ToggleGroup>

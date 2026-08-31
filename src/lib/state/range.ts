@@ -1,4 +1,4 @@
-import { monthEnd } from '../stats/monthly.ts';
+import { CALENDAR_START, cycleClosing, cycleOf, cycleOpening } from '../stats/cycle.ts';
 import type { Transaction } from '../types.ts';
 
 export type RangePreset = 'all' | '7d' | '30d' | '90d' | 'month' | 'custom';
@@ -31,6 +31,8 @@ export interface RangeInput {
 	readonly latestDate: string;
 	/** `YYYY-MM` the month view is parked on. Blank means the newest month. */
 	readonly selectedMonth: string;
+	/** Day of the month a month opens on. See {@link cycleOf}. */
+	readonly monthStart?: number;
 }
 
 export interface Bounds {
@@ -56,10 +58,14 @@ export function resolveRange(input: RangeInput): Bounds {
 	}
 	if (input.range === 'all') return { from: null, to: null };
 	if (input.range === 'month') {
-		// The whole calendar month, even for a month the statement stops part-way
-		// into: the filter is inclusive, so an open end simply takes what exists.
-		const month = input.selectedMonth === '' ? input.latestDate.slice(0, 7) : input.selectedMonth;
-		return { from: `${month}-01`, to: monthEnd(month) };
+		// The whole month, even for one the statement stops part-way into: the
+		// filter is inclusive, so an open end simply takes what exists. Which days
+		// that month covers is the reader's setting, not the calendar's.
+		const start = input.monthStart ?? CALENDAR_START;
+		const month =
+			input.selectedMonth === '' ? cycleOf(input.latestDate, start) : input.selectedMonth;
+
+		return { from: cycleOpening(month, start), to: cycleClosing(month, start) };
 	}
 
 	const days = { '7d': 7, '30d': 30, '90d': 90 }[input.range];

@@ -1,4 +1,8 @@
 <script lang="ts">
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import * as Table from '$lib/components/ui/table/index.js';
+	import { cn } from '$lib/utils.js';
 	import { formatCurrency, formatDate } from '../format.ts';
 	import type { BalancePoint } from '../types.ts';
 
@@ -68,205 +72,110 @@
 		if (sortBy !== column) return 'none';
 		return ascending ? 'ascending' : 'descending';
 	}
+
+	const head = 'h-auto px-2.5 pb-2 text-xs text-muted-foreground';
+	const numeric = 'text-right tabular-nums';
+	/** The category column is the first to go when the card gets narrow. */
+	const hideNarrow = 'max-sm:hidden';
 </script>
 
 {#if searchable}
-	<div class="toolbar">
-		<input
+	<div class="mb-3 flex items-center gap-3">
+		<Input
 			type="search"
 			placeholder="Search description, category, merchant…"
+			class="min-w-0 flex-1 text-[13px]"
 			bind:value={query}
 			aria-label="Search transactions"
 		/>
-		<p class="count">{sorted.length} of {rows.length}</p>
+		<p class="flex-none text-xs text-faint tabular-nums">{sorted.length} of {rows.length}</p>
 	</div>
 {/if}
 
-<div class="scroll">
-	<table>
-		<thead>
-			<tr>
-				<th scope="col" aria-sort={ariaSort('date')}>
-					<button type="button" onclick={() => sort('date')}>Date</button>
-				</th>
-				<th scope="col">Description</th>
-				<th scope="col" class="hide-narrow">Category</th>
-				<th scope="col" class="numeric" aria-sort={ariaSort('amount')}>
-					<button type="button" onclick={() => sort('amount')}>Amount</button>
-				</th>
-				<th scope="col" class="numeric" aria-sort={ariaSort('balance')}>
-					<button type="button" onclick={() => sort('balance')}>Balance</button>
-				</th>
-			</tr>
-		</thead>
-		<tbody>
-			{#each visible as row (row.transaction.id)}
-				<tr>
-					<td class="date">
-						{formatDate(row.transaction.date)}
-						{#if row.transaction.time}<span class="time">{row.transaction.time.slice(0, 5)}</span
-							>{/if}
-					</td>
-					<td>
-						<span class="description"
-							>{row.transaction.description || row.transaction.merchant}</span
-						>
-						{#if row.transaction.counterparty}
-							<span class="counterparty">{row.transaction.counterparty}</span>
-						{/if}
-					</td>
-					<td class="hide-narrow category">{row.transaction.category}</td>
-					<td class="numeric" class:credit={row.transaction.amount > 0}>
-						{formatCurrency(row.transaction.amount)}
-					</td>
-					<td class="numeric balance">{formatCurrency(row.balance)}</td>
-				</tr>
-			{:else}
-				<tr>
-					<td colspan="5" class="empty">No transactions match.</td>
-				</tr>
-			{/each}
-		</tbody>
-	</table>
-</div>
+<Table.Root class="text-[13px]">
+	<Table.Header>
+		<Table.Row class="hover:bg-transparent">
+			<Table.Head class={head} aria-sort={ariaSort('date')}>
+				<button
+					type="button"
+					class="cursor-pointer hover:text-foreground"
+					onclick={() => sort('date')}
+				>
+					Date
+				</button>
+			</Table.Head>
+			<Table.Head class={head}>Description</Table.Head>
+			<Table.Head class={cn(head, hideNarrow)}>Category</Table.Head>
+			<Table.Head class={cn(head, numeric)} aria-sort={ariaSort('amount')}>
+				<button
+					type="button"
+					class="cursor-pointer hover:text-foreground"
+					onclick={() => sort('amount')}
+				>
+					Amount
+				</button>
+			</Table.Head>
+			<Table.Head class={cn(head, numeric)} aria-sort={ariaSort('balance')}>
+				<button
+					type="button"
+					class="cursor-pointer hover:text-foreground"
+					onclick={() => sort('balance')}
+				>
+					Balance
+				</button>
+			</Table.Head>
+		</Table.Row>
+	</Table.Header>
+	<Table.Body>
+		{#each visible as row (row.transaction.id)}
+			<Table.Row>
+				<Table.Cell class="px-2.5 py-2.5 align-top whitespace-nowrap text-muted-foreground">
+					{formatDate(row.transaction.date)}
+					{#if row.transaction.time}
+						<span class="ml-1.5 text-faint tabular-nums">{row.transaction.time.slice(0, 5)}</span>
+					{/if}
+				</Table.Cell>
+				<Table.Cell class="px-2.5 py-2.5 align-top">
+					<span class="block max-w-[42ch] truncate">
+						{row.transaction.description || row.transaction.merchant}
+					</span>
+					{#if row.transaction.counterparty}
+						<span class="text-xs text-faint">{row.transaction.counterparty}</span>
+					{/if}
+				</Table.Cell>
+				<Table.Cell class={cn('px-2.5 py-2.5 align-top text-xs text-faint', hideNarrow)}>
+					{row.transaction.category}
+				</Table.Cell>
+				<Table.Cell
+					class={cn(
+						'px-2.5 py-2.5 align-top',
+						numeric,
+						row.transaction.amount > 0 && 'text-positive'
+					)}
+				>
+					{formatCurrency(row.transaction.amount)}
+				</Table.Cell>
+				<Table.Cell class={cn('px-2.5 py-2.5 align-top text-muted-foreground', numeric)}>
+					{formatCurrency(row.balance)}
+				</Table.Cell>
+			</Table.Row>
+		{:else}
+			<Table.Row class="hover:bg-transparent">
+				<Table.Cell colspan={5} class="py-7 text-center text-faint"
+					>No transactions match.</Table.Cell
+				>
+			</Table.Row>
+		{/each}
+	</Table.Body>
+</Table.Root>
 
 {#if sorted.length > pageSize}
-	<button class="more" type="button" onclick={() => (expanded = !expanded)}>
+	<Button
+		variant="outline"
+		size="xs"
+		class="mt-3 border-input hover:border-series"
+		onclick={() => (expanded = !expanded)}
+	>
 		{expanded ? 'Show fewer' : `Show all ${sorted.length}`}
-	</button>
+	</Button>
 {/if}
-
-<style>
-	.toolbar {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		margin-bottom: 12px;
-	}
-
-	input[type='search'] {
-		flex: 1;
-		min-width: 0;
-		padding: 7px 11px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--surface-1);
-		font-size: 13px;
-	}
-
-	.count {
-		margin: 0;
-		flex: none;
-		font-size: 12px;
-		color: var(--text-muted);
-		font-variant-numeric: tabular-nums;
-	}
-
-	.scroll {
-		overflow-x: auto;
-	}
-
-	table {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 13px;
-	}
-
-	th {
-		text-align: left;
-		font-weight: 500;
-		font-size: 12px;
-		color: var(--text-secondary);
-		padding: 0 10px 8px;
-		border-bottom: 1px solid var(--border);
-		white-space: nowrap;
-	}
-
-	th button {
-		background: none;
-		border: 0;
-		padding: 0;
-		font: inherit;
-		color: inherit;
-		cursor: pointer;
-	}
-
-	th button:hover {
-		color: var(--text-primary);
-	}
-
-	th.numeric,
-	td.numeric {
-		text-align: right;
-		font-variant-numeric: tabular-nums;
-	}
-
-	td {
-		padding: 9px 10px;
-		border-bottom: 1px solid var(--border);
-		vertical-align: top;
-	}
-
-	tbody tr:hover {
-		background: var(--surface-2);
-	}
-
-	.date {
-		white-space: nowrap;
-		color: var(--text-secondary);
-	}
-
-	.time {
-		margin-left: 6px;
-		color: var(--text-muted);
-		font-variant-numeric: tabular-nums;
-	}
-
-	.description {
-		display: block;
-		max-width: 42ch;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.counterparty,
-	.category {
-		color: var(--text-muted);
-		font-size: 12px;
-	}
-
-	.credit {
-		color: var(--status-good-text);
-	}
-
-	.balance {
-		color: var(--text-secondary);
-	}
-
-	.empty {
-		text-align: center;
-		color: var(--text-muted);
-		padding: 28px 0;
-	}
-
-	.more {
-		margin-top: 12px;
-		padding: 6px 12px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--surface-1);
-		font-size: 12px;
-		cursor: pointer;
-	}
-
-	.more:hover {
-		border-color: var(--series-1);
-	}
-
-	@media (max-width: 640px) {
-		.hide-narrow {
-			display: none;
-		}
-	}
-</style>

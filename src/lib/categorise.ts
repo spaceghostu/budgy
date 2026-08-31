@@ -16,8 +16,12 @@
  * description and survives both, so one choice covers every row from that
  * merchant, in this statement and the next.
  *
- * Only unfiled rows are ever relabelled: what the bank said stays
- * authoritative, and applying the same rules twice changes nothing.
+ * The bank's filing is the **default**, not the ceiling. A rule overrides it,
+ * because the reader is the one who knows that a hardware shop was a birthday
+ * present and not home improvement — and because a breakdown you cannot correct
+ * is one you end up not trusting. What the bank said is still what a row starts
+ * as, every override is listed in one place and removable from it, and applying
+ * the same rules twice changes nothing.
  */
 
 import { classifyFlow, isFee, normaliseCategory } from './parse/normalise.ts';
@@ -203,6 +207,9 @@ export function bankCategoryFor(
 /**
  * Apply the reader's categories to the statement.
  *
+ * A rule wins over the bank's own filing. See the note at the top of this file
+ * for why, and {@link listRules} for where the overrides are visible.
+ *
  * @param transactions The statement as its files gave it.
  * @returns The same array when there is nothing to apply, so the derived chain
  * downstream does not rebuild on every keystroke elsewhere.
@@ -224,18 +231,25 @@ function relabel(
 	transactions: readonly Transaction[]
 ): Transaction {
 	if (category === undefined || category === '') return transaction;
-	if (!isUncategorised(transaction.category)) return transaction;
+
+	// Already there. Returning the row itself rather than a copy is what keeps
+	// applying the same rules twice a no-op all the way down the derived chain.
+	if (normaliseCategory(transaction.category) === normaliseCategory(category)) return transaction;
 
 	const filed = { ...transaction, category };
 
-	// The bank's own heading still decides what the row *is* rather than only
-	// where it is filed — its transfer and fee headings are read the same way
-	// here as for an imported row, and every total downstream reads `flow`. So a
-	// row the bank never filed takes the heading its new category sits under, and
-	// is classified again from there.
-	const heading = isUncategorised(transaction.bankCategory)
-		? bankCategoryFor(category, transactions)
-		: null;
+	// The bank's own heading decides what the row *is* rather than only where it
+	// is filed — its transfer and fee headings are read here the same way as for
+	// an imported row, and every total downstream reads `flow`. So a row moved to
+	// a new category takes the heading that category sits under and is classified
+	// again from there: filing a merchant under `Transfers` has to take it out of
+	// spending whether or not the bank had already filed it somewhere.
+	//
+	// A name the reader invented sits under no heading the bank knows, and gets
+	// `null`. That row keeps the heading and the classification it arrived with,
+	// which is the truthful answer: renaming a bucket says nothing about whether
+	// the money left the household.
+	const heading = bankCategoryFor(category, transactions);
 	if (heading === null) return filed;
 
 	const classifiable = {
@@ -350,31 +364,44 @@ export interface AppliedRule {
 }
 
 /**
- * The rules in force, by merchant.
+ * The rules in force, by merchant — and how much of the statement each moves.
+ *
+ * This is where an override is visible and where it is taken back off, so the
+ * count has to be what the rule actually does: the rows it *changes*. A rule
+ * naming the category a merchant is already filed under changes nothing and
+ * counts nothing, which is the honest reading of a choice that has since become
+ * what the bank says anyway.
+ *
+ * Rows the bank filed count here where {@link uncategorisedGroups} would not
+ * ask about them — that list is about what still needs a decision, this one is
+ * about decisions already made. Transfers and no-op rows count too, now that a
+ * rule can be what turns one into spending.
  *
  * @param transactions The statement as its files gave it, *before*
- * {@link applyCategoryRules} — the count is how many rows the choice covers,
- * which is only visible while they are still unfiled. It counts the same rows
- * {@link uncategorisedGroups} asked about, so a merchant listed as two
- * transactions does not become three the moment it is filed. A rule with no rows
- * at all is kept: rules outlive the statement that prompted them, and one for a
- * merchant this month has none of still has to be removable.
+ * {@link applyCategoryRules} — a rule that has already been applied has, by
+ * definition, nothing left to change. A rule with no rows at all is kept: rules
+ * outlive the statement that prompted them, and one for a merchant this month
+ * has none of still has to be removable.
  */
 export function listRules(
 	rules: CategoryRules,
 	transactions: readonly Transaction[]
 ): readonly AppliedRule[] {
-	const counts = new Map<string, number>();
+	const byMerchant = new Map<string, Transaction[]>();
 	for (const transaction of transactions) {
-		if (!needsFiling(transaction)) continue;
-		counts.set(transaction.merchant, (counts.get(transaction.merchant) ?? 0) + 1);
+		byMerchant.set(transaction.merchant, [
+			...(byMerchant.get(transaction.merchant) ?? []),
+			transaction
+		]);
 	}
 
 	return Object.entries(rules)
 		.map(([merchant, category]) => ({
 			merchant,
 			category,
-			count: counts.get(merchant) ?? 0
+			count: (byMerchant.get(merchant) ?? []).filter(
+				(transaction) => normaliseCategory(transaction.category) !== normaliseCategory(category)
+			).length
 		}))
 		.sort((a, b) => a.merchant.localeCompare(b.merchant));
 }

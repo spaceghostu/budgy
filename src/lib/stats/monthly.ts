@@ -1,29 +1,30 @@
 import type { MonthMetric, MonthPoint, MonthSeries, Transaction } from '../types.ts';
 import { round } from './balance.ts';
+import { CALENDAR_START, cycleDay, cycleLength, cycleOf } from './cycle.ts';
 
 /**
  * Every month the statement touches, oldest first, as `YYYY-MM`.
  *
  * This is what the month picker steps through, so it is derived from the data
  * rather than from a calendar: a statement has the months it has.
+ *
+ * @param start Day of the month a month opens on. See {@link cycleOf}.
  */
-export function listMonths(transactions: readonly Transaction[]): readonly string[] {
+export function listMonths(
+	transactions: readonly Transaction[],
+	start: number = CALENDAR_START
+): readonly string[] {
 	const months = new Set<string>();
-	for (const transaction of transactions) months.add(monthOf(transaction.date));
+	for (const transaction of transactions) months.add(cycleOf(transaction.date, start));
 
 	return [...months].sort();
-}
-
-/** The last date of a month, as `YYYY-MM-DD`. Knows about leap years. */
-export function monthEnd(month: string): string {
-	return `${month}-${`${daysInMonth(month)}`.padStart(2, '0')}`;
 }
 
 /**
  * Turn a statement into one running-total line per month, so the months can be
  * laid over each other and compared.
  *
- * The total accumulates from the first of the month and resets at each new one.
+ * The total accumulates from the day the month opens and resets at the next one.
  * Transfers between the owner's own accounts are left out whichever side is
  * being counted, exactly as they are everywhere else: moving money between two
  * of your accounts is not a month going well.
@@ -38,19 +39,21 @@ export function monthEnd(month: string): string {
  *
  * @param transactions Any order; grouped by their own dates.
  * @param metric Which side of the money to add up. See {@link MonthMetric}.
+ * @param start Day of the month a month opens on. See {@link cycleOf}.
  */
 export function buildMonthlyTotals(
 	transactions: readonly Transaction[],
-	metric: MonthMetric = 'net'
+	metric: MonthMetric = 'net',
+	start: number = CALENDAR_START
 ): readonly MonthSeries[] {
 	const netByMonth = new Map<string, Map<number, number>>();
 
 	for (const transaction of transactions) {
-		const month = monthOf(transaction.date);
+		const month = cycleOf(transaction.date, start);
 		const days = netByMonth.get(month) ?? new Map<number, number>();
-		const day = dayOf(transaction.date);
+		const day = cycleDay(transaction.date, start);
 
-		days.set(day, (days.get(day) ?? 0) + contribution(transaction, metric));
+		days.set(day, (days.get(day) ?? 0) + flowAmount(transaction, metric));
 		netByMonth.set(month, days);
 	}
 
@@ -58,6 +61,7 @@ export function buildMonthlyTotals(
 
 	return months.map((month, index) =>
 		toSeries(month, netByMonth.get(month) ?? new Map(), {
+			length: cycleLength(month, start),
 			isOldest: index === 0,
 			isNewest: index === months.length - 1
 		})
@@ -106,8 +110,13 @@ function median(values: readonly number[]): number {
  * line, higher has to mean more spent. Transfers and no-op rows contribute
  * nothing, so a month made entirely of them keeps its line — a flat one, which
  * is the truth about it.
+ *
+ * Exported because a forecast continues one of these lines past the last row in
+ * the statement: what a projected day adds has to be counted the same way as
+ * what a real one did, or the line would change its meaning where it turns
+ * dashed. See `stats/forecast.ts`.
  */
-function contribution(transaction: Transaction, metric: MonthMetric): number {
+export function flowAmount(transaction: Transaction, metric: MonthMetric): number {
 	if (metric === 'out') return transaction.flow === 'expense' ? -transaction.amount : 0;
 	if (metric === 'in') return transaction.flow === 'income' ? transaction.amount : 0;
 
@@ -117,12 +126,12 @@ function contribution(transaction: Transaction, metric: MonthMetric): number {
 function toSeries(
 	month: string,
 	netByDay: ReadonlyMap<number, number>,
-	position: { isOldest: boolean; isNewest: boolean }
+	position: { length: number; isOldest: boolean; isNewest: boolean }
 ): MonthSeries {
 	const observed = [...netByDay.keys()].sort((a, b) => a - b);
 	const firstDay = observed[0] ?? 1;
 	const lastDay = observed.at(-1) ?? 1;
-	const length = daysInMonth(month);
+	const length = position.length;
 
 	const endDay = position.isNewest ? lastDay : length;
 
@@ -139,18 +148,4 @@ function toSeries(
 		total: points.at(-1)?.total ?? 0,
 		isPartial: (position.isOldest && firstDay > 1) || (position.isNewest && lastDay < length)
 	};
-}
-
-function monthOf(date: string): string {
-	return date.slice(0, 7);
-}
-
-function dayOf(date: string): number {
-	return Number(date.slice(8, 10));
-}
-
-/** Day 0 of the next month is the last day of this one. */
-function daysInMonth(month: string): number {
-	const [year, index] = month.split('-').map(Number);
-	return new Date(year, index, 0).getDate();
 }

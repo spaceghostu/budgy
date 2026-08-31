@@ -164,7 +164,10 @@ describe('applyCategoryRules', () => {
 		expect(applied[0].bankCategory).toBe('Food and Drink');
 	});
 
-	it('leaves the category alone when the bank supplied one', () => {
+	it('moves the heading with the category, whatever the bank had said', () => {
+		// The heading is not a second opinion about where the row belongs — it is
+		// what says whether the row is spending at all. Leaving it behind would
+		// file a row as Groceries under Miscellaneous, which is neither.
 		const partlyFiled = [
 			makeTransaction({
 				date: '2026-01-05',
@@ -176,13 +179,77 @@ describe('applyCategoryRules', () => {
 		];
 		const applied = applyCategoryRules(partlyFiled, { 'CORNER SHOP': 'Groceries' });
 
-		expect(applied[0]).toMatchObject({ bankCategory: 'Miscellaneous', category: 'Groceries' });
+		expect(applied[0]).toMatchObject({ bankCategory: 'Food and Drink', category: 'Groceries' });
 	});
 
-	it('never overwrites what the bank filed', () => {
+	it('overrides what the bank filed — the reader has the last word', () => {
+		// The bank does not know the gym membership was a medical referral. A
+		// breakdown that cannot be corrected is one a reader stops trusting.
 		const applied = applyCategoryRules(rows, { GYM: 'Healthcare' });
 
-		expect(applied[2].category).toBe('Sport and Fitness');
+		expect(applied[2]).toMatchObject({
+			category: 'Healthcare',
+			bankCategory: 'Health and Personal Care'
+		});
+	});
+
+	it('moves an overridden row out of the bucket it was in', () => {
+		const insights = buildInsights(applyCategoryRules(rows, { GYM: 'Healthcare' }), 0);
+
+		expect(
+			insights.categories.find((bucket) => bucket.label === 'Sport and Fitness')
+		).toBeUndefined();
+		expect(insights.categories.find((bucket) => bucket.label === 'Healthcare')?.total).toBe(300);
+	});
+
+	it('takes a row the bank filed out of spending when it is overridden to a transfer', () => {
+		const applied = applyCategoryRules(rows, { GYM: 'Transfers' });
+
+		expect(applied[2].flow).toBe('transfer');
+		// The gym's 300 leaves; the two unfiled rows are still spending.
+		expect(buildInsights(applied, 0).summary.expense).toBe(200);
+	});
+
+	it('takes the reader’s word over a heading that said the row was a transfer', () => {
+		// The bank filed no category but called it an own-account move. Being told
+		// it was groceries settles both questions, not one of them.
+		const misfiled = [
+			makeTransaction({
+				date: '2026-01-05',
+				amount: -120,
+				merchant: 'CORNER SHOP',
+				bankCategory: 'Not for Financial Analyser',
+				category: 'Uncategorised',
+				flow: 'transfer'
+			})
+		];
+		const applied = applyCategoryRules(misfiled, { 'CORNER SHOP': 'Groceries' });
+
+		expect(applied[0]).toMatchObject({ flow: 'expense', bankCategory: 'Food and Drink' });
+	});
+
+	it('leaves a row alone when the rule says what it already says', () => {
+		// Not merely equal — the same object, so nothing downstream rebuilds.
+		const applied = applyCategoryRules(rows, { GYM: 'Sport and Fitness' });
+
+		expect(applied[2]).toBe(rows[2]);
+	});
+
+	it('reads a rule that differs only in casing as the category it names', () => {
+		const applied = applyCategoryRules(rows, { GYM: 'sport and fitness' });
+
+		expect(applied[2]).toBe(rows[2]);
+	});
+
+	it('keeps the classification when overridden to a name the bank never heard of', () => {
+		// Renaming a bucket says nothing about whether the money left the household.
+		const applied = applyCategoryRules(rows, { GYM: 'School fees' });
+
+		expect(applied[2]).toMatchObject({
+			category: 'School fees',
+			bankCategory: 'Recreation',
+			flow: 'expense'
+		});
 	});
 
 	it('leaves merchants without a rule alone', () => {
@@ -366,19 +433,28 @@ describe('listRules', () => {
 		makeTransaction({ date: '2026-01-11', amount: -300, merchant: 'CORNER SHOP' })
 	];
 
-	it('counts only the rows a rule actually files', () => {
+	it('counts every row the rule moves, filed or not', () => {
+		// Two unfiled rows and one the bank filed as Groceries: the choice moves
+		// all three, and the list is where a reader sees how far it reaches.
 		const listed = listRules({ 'CORNER SHOP': 'Homeware' }, rows);
 
-		expect(listed).toEqual([{ merchant: 'CORNER SHOP', category: 'Homeware', count: 2 }]);
+		expect(listed).toEqual([{ merchant: 'CORNER SHOP', category: 'Homeware', count: 3 }]);
 	});
 
-	it('counts the same rows the merchant was listed with, so the figure does not jump', () => {
+	it('counts a row a rule would turn into spending', () => {
 		const listed = listRules({ 'CORNER SHOP': 'Homeware' }, [
 			...rows,
-			blank({ date: '2026-01-12', amount: 0, merchant: 'CORNER SHOP', flow: 'noop' })
+			blank({ date: '2026-01-12', amount: -50, merchant: 'CORNER SHOP', flow: 'transfer' })
 		]);
 
-		expect(listed[0].count).toBe(2);
+		expect(listed[0].count).toBe(4);
+	});
+
+	it('counts nothing for a rule that says what the bank already said', () => {
+		// The choice stands and stays removable; it simply moves nothing today.
+		const listed = listRules({ 'CORNER SHOP': 'Groceries' }, [rows[2]]);
+
+		expect(listed[0].count).toBe(0);
 	});
 
 	it('keeps a rule for a merchant this statement never mentions', () => {

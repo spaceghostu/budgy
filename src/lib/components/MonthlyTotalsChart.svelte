@@ -7,7 +7,14 @@
 		stepAfterPath,
 		type Point
 	} from '../charts/scale.ts';
-	import { formatCurrency, formatCurrencyShort, formatMonth, useThousands } from '../format.ts';
+	import {
+		formatCurrency,
+		formatCurrencyShort,
+		formatMonth,
+		formatOrdinal,
+		useThousands
+	} from '../format.ts';
+	import { CALENDAR_START, isCalendarStart } from '../stats/cycle.ts';
 	import type { MonthMetric, MonthPoint, MonthSeries } from '../types.ts';
 
 	interface Props {
@@ -18,14 +25,61 @@
 		metric?: MonthMetric;
 		/** The middle month day by day, drawn as a reference. `null` hides it. */
 		typical?: readonly MonthPoint[] | null;
+		/** Says what the lines are, in place of the metric's own wording. */
+		caption?: string;
+		/** What the plot is called, for a reader who cannot see it. */
+		label?: string;
+		/**
+		 * Where the value axis starts.
+		 *
+		 * A flow total begins at zero and has to show it, or a month that spent
+		 * nothing would not read as flat. An absolute level sits wherever the money
+		 * is — dragging zero into view alongside a balance in the tens of thousands
+		 * flattens the whole plot into a line at the top.
+		 */
+		baseline?: 'zero' | 'data';
+		/**
+		 * How the lines are coloured.
+		 *
+		 * `focus` puts one month forward and lets the rest fall back to a single
+		 * pale step — right when the months are interchangeable and only the one
+		 * being read matters. `recency` walks an ordinal ramp from oldest to
+		 * newest, so a fan of lines reads as a drift over time rather than as a
+		 * dozen unrelated subjects.
+		 */
+		shade?: 'focus' | 'recency';
+		/** Day of the month the reader's months open on. */
+		monthStart?: number;
 	}
 
-	const { months, focusMonth, metric = 'net', typical = null }: Props = $props();
+	const {
+		months,
+		focusMonth,
+		metric = 'net',
+		typical = null,
+		caption,
+		label = 'Running total through the month, one line per month. Switch to the table view for the underlying figures.',
+		baseline = 'zero',
+		shade = 'focus',
+		monthStart = CALENDAR_START
+	}: Props = $props();
+
+	/**
+	 * Said once, under the plot, when the months do not open on the 1st.
+	 *
+	 * The axis counts days from wherever a month opens, and every month opens on
+	 * the same day — so one sentence fixes the whole axis, where labelling each
+	 * tick with a real date could not: day 8 is a different date in every month
+	 * laid over the others.
+	 */
+	const dayNote = $derived(
+		isCalendarStart(monthStart) ? '' : `Day 1 is the ${formatOrdinal(monthStart)}.`
+	);
 
 	const CAPTIONS: Record<MonthMetric, string> = {
-		net: 'Money in less money out, counted from the first of each month and reset at the next.',
-		out: 'Everything that left the account, counted from the first of each month and reset at the next.',
-		in: 'Everything that came in, counted from the first of each month and reset at the next.'
+		net: 'Money in less money out, counted from the start of each month and reset at the next.',
+		out: 'Everything that left the account, counted from the start of each month and reset at the next.',
+		in: 'Everything that came in, counted from the start of each month and reset at the next.'
 	};
 
 	const MARGIN = { top: 16, right: 56, bottom: 30, left: 68 };
@@ -34,6 +88,9 @@
 
 	/** How many months the readout names before folding the rest into a count. */
 	const READOUT_LIMIT = 12;
+
+	/** Steps in the recency ramp, oldest to newest. */
+	const TONES = 5;
 
 	let width = $state(720);
 	let hoveredDay = $state<number | null>(null);
@@ -46,7 +103,7 @@
 		...(typical ?? []).map((point) => point.total)
 	]);
 
-	const yDomain = $derived(niceDomain(Math.min(...totals, 0), Math.max(...totals, 0)));
+	const yDomain = $derived(valueDomain(totals));
 	const x = $derived(linearScale([1, Math.max(lastDay, 2)], [0, plotWidth]));
 	const y = $derived(linearScale(yDomain, [PLOT_HEIGHT, 0]));
 
@@ -59,19 +116,32 @@
 	const newestFirst = $derived([...months].reverse());
 
 	const lines = $derived(
-		months.map((month) => {
+		months.map((month, index) => {
 			const end = month.points.at(-1);
+			const isFocus = month.month === focusMonth;
 
 			return {
 				month: month.month,
 				label: formatMonth(month.month),
-				isFocus: month.month === focusMonth,
+				isFocus,
 				total: month.total,
+				stroke:
+					shade === 'recency'
+						? toneOf(index)
+						: isFocus
+							? 'var(--series-1)'
+							: 'var(--series-context)',
 				path: stepAfterPath(month.points.map(toPixels)),
 				end: end === undefined ? null : toPixels(end)
 			};
 		})
 	);
+
+	/** Every line's colour, by month, for the marks and rows that echo it. */
+	const strokes = $derived(new Map(lines.map((line) => [line.month, line.stroke])));
+
+	/** The ramp itself, palest first — the legend draws it as a scale. */
+	const ramp = $derived(Array.from({ length: TONES }, (_, step) => `var(--recency-${step + 1})`));
 
 	/** The focused month is drawn last, so it sits above the context lines. */
 	const ordered = $derived([...lines].sort((a, b) => Number(a.isFocus) - Number(b.isFocus)));
@@ -94,6 +164,32 @@
 	const typicalOn = $derived(
 		hoveredDay === null || typical === null ? undefined : typical[hoveredDay - 1]
 	);
+
+	function valueDomain(values: readonly number[]): readonly [number, number] {
+		if (values.length === 0) return [0, 1];
+
+		const low = Math.min(...values);
+		const high = Math.max(...values);
+
+		return baseline === 'zero'
+			? niceDomain(Math.min(low, 0), Math.max(high, 0))
+			: niceDomain(low, high);
+	}
+
+	/**
+	 * Spread the ramp across however many months are on screen.
+	 *
+	 * Past five months some neighbours share a step. That is the honest reading:
+	 * the ramp says roughly how old a line is, and two months running are close
+	 * to the same age.
+	 */
+	function toneOf(index: number): string {
+		if (months.length <= 1) return `var(--recency-${TONES})`;
+
+		const step = Math.round((index / (months.length - 1)) * (TONES - 1));
+
+		return `var(--recency-${step + 1})`;
+	}
 
 	function toPixels(point: { day: number; total: number }): Point {
 		return { x: x(point.day), y: y(point.total) };
@@ -175,12 +271,7 @@
 		<p class="empty">No transactions to compare.</p>
 	{:else}
 		<div class="plot-wrap">
-			<svg
-				{width}
-				height={HEIGHT}
-				role="img"
-				aria-label="Running total through the month, one line per month. Switch to the table view for the underlying figures."
-			>
+			<svg {width} height={HEIGHT} role="img" aria-label={label}>
 				<g transform="translate({MARGIN.left},{MARGIN.top})">
 					{#each yTicks as tick (tick)}
 						<line class="grid" x1="0" x2={plotWidth} y1={y(tick)} y2={y(tick)} />
@@ -198,7 +289,12 @@
 					{/if}
 
 					{#each ordered as line (line.month)}
-						<path class="line" class:focus={line.isFocus} d={line.path} />
+						<path
+							class="line"
+							class:focus={line.isFocus}
+							style="--line:{line.stroke}"
+							d={line.path}
+						/>
 					{/each}
 
 					{#if typicalPath !== ''}
@@ -208,7 +304,7 @@
 					{#each readout as row (row.month)}
 						<circle
 							class="cursor-dot"
-							class:focus={row.isFocus}
+							style="--line:{strokes.get(row.month)}"
 							cx={x(row.point.day)}
 							cy={y(row.point.total)}
 							r={row.isFocus ? 4.5 : 3}
@@ -216,7 +312,13 @@
 					{/each}
 
 					{#if focus?.end}
-						<circle class="end-dot" cx={focus.end.x} cy={focus.end.y} r="4.5" />
+						<circle
+							class="end-dot"
+							style="--line:{focus.stroke}"
+							cx={focus.end.x}
+							cy={focus.end.y}
+							r="4.5"
+						/>
 						<!-- Beside the line's end rather than pinned right: a month the
 						     statement stops part-way into ends mid-plot. -->
 						<text
@@ -270,7 +372,12 @@
 					<p class="tooltip-meta">Day {hoveredDay}</p>
 					{#each readout.slice(0, READOUT_LIMIT) as row (row.month)}
 						<p class="tooltip-row" class:strong={row.isFocus}>
-							<span class="key" class:focus={row.isFocus} aria-hidden="true"></span>
+							<span
+								class="key"
+								class:focus={row.isFocus}
+								style="--line:{strokes.get(row.month)}"
+								aria-hidden="true"
+							></span>
 							<span class="desc">{row.label}</span>
 							<span class="amount">{formatCurrency(row.point.total)}</span>
 						</p>
@@ -293,13 +400,32 @@
 
 		{#if months.length > 1}
 			<ul class="legend">
-				<li>
-					<span class="key focus" aria-hidden="true"></span>{focus?.label ?? 'Selected month'}
-				</li>
-				<li>
-					<span class="key" aria-hidden="true"></span>{contextCount}
-					other {contextCount === 1 ? 'month' : 'months'}
-				</li>
+				{#if shade === 'recency'}
+					<!-- The months are the scale, so the ends are named rather than
+					     labelled "oldest" and "newest" in the abstract. -->
+					<li>
+						<span>{lines[0]?.label}</span>
+						<span class="ramp" aria-hidden="true">
+							{#each ramp as tone (tone)}
+								<span class="tone" style="background:{tone}"></span>
+							{/each}
+						</span>
+						<span>{lines.at(-1)?.label}</span>
+					</li>
+					<li>
+						<span class="key focus" style="--line:{focus?.stroke}" aria-hidden="true"
+						></span>{focus?.label ?? 'Selected month'}, in front
+					</li>
+				{:else}
+					<li>
+						<span class="key focus" style="--line:{focus?.stroke}" aria-hidden="true"
+						></span>{focus?.label ?? 'Selected month'}
+					</li>
+					<li>
+						<span class="key" aria-hidden="true"></span>{contextCount}
+						other {contextCount === 1 ? 'month' : 'months'}
+					</li>
+				{/if}
 				{#if typical !== null}
 					<li><span class="key typical" aria-hidden="true"></span>Typical month</li>
 				{/if}
@@ -307,7 +433,8 @@
 		{/if}
 
 		<figcaption>
-			{CAPTIONS[metric]}
+			{caption ?? CAPTIONS[metric]}
+			{dayNote}
 			{#if months.length === 1}
 				Only one month so far — there is nothing to compare it against yet.
 			{:else if focusSeries?.isPartial && focusIsNewest}
@@ -346,18 +473,18 @@
 		stroke-width: 1;
 	}
 
-	/* Every month that is not the one being read recedes to the pale step of the
-	   same blue ramp, so the fan reads as context rather than as nine subjects. */
+	/* Each line carries its own colour in --line: either the pale context step,
+	   so the fan reads as context rather than as nine subjects, or a step of the
+	   recency ramp. Weight, not hue, still marks the month being read. */
 	.line {
 		fill: none;
-		stroke: var(--series-context);
+		stroke: var(--line, var(--series-context));
 		stroke-width: 1.5;
 		stroke-linejoin: round;
 		stroke-linecap: round;
 	}
 
 	.line.focus {
-		stroke: var(--series-1);
 		stroke-width: 2.5;
 	}
 
@@ -366,36 +493,32 @@
 	   mark on the plot that never happened. */
 	.typical {
 		fill: none;
-		stroke: var(--text-muted);
+		stroke: var(--faint);
 		stroke-width: 1.5;
 		stroke-dasharray: 5 4;
 		stroke-linecap: round;
 	}
 
 	.end-dot {
-		fill: var(--series-1);
-		stroke: var(--surface-1);
+		fill: var(--line, var(--series-1));
+		stroke: var(--card);
 		stroke-width: 2;
 	}
 
 	.cursor-dot {
-		fill: var(--series-context);
-		stroke: var(--surface-1);
+		fill: var(--line, var(--series-context));
+		stroke: var(--card);
 		stroke-width: 2;
 	}
 
-	.cursor-dot.focus {
-		fill: var(--series-1);
-	}
-
 	.end-label {
-		fill: var(--text-primary);
+		fill: var(--foreground);
 		font-size: 12px;
 		font-weight: 600;
 	}
 
 	.tick {
-		fill: var(--text-muted);
+		fill: var(--faint);
 		font-size: 11px;
 		font-variant-numeric: tabular-nums;
 	}
@@ -414,8 +537,8 @@
 		top: 8px;
 		min-width: 180px;
 		max-width: 240px;
-		background: var(--surface-1);
-		border: 1px solid var(--border-strong);
+		background: var(--card);
+		border: 1px solid var(--input);
 		border-radius: var(--radius-md);
 		box-shadow: 0 4px 16px rgba(11, 11, 11, 0.12);
 		padding: 10px 12px;
@@ -428,7 +551,7 @@
 
 	.tooltip-meta {
 		font-size: 12px;
-		color: var(--text-secondary);
+		color: var(--muted-foreground);
 	}
 
 	.tooltip-row {
@@ -437,11 +560,11 @@
 		gap: 6px;
 		margin-top: 4px !important;
 		font-size: 12px;
-		color: var(--text-secondary);
+		color: var(--muted-foreground);
 	}
 
 	.tooltip-row.strong {
-		color: var(--text-primary);
+		color: var(--foreground);
 		font-weight: 600;
 	}
 
@@ -450,16 +573,15 @@
 		width: 10px;
 		height: 2px;
 		border-radius: 1px;
-		background: var(--series-context);
+		background: var(--line, var(--series-context));
 	}
 
 	.key.focus {
 		height: 3px;
-		background: var(--series-1);
 	}
 
 	.key.typical {
-		background: repeating-linear-gradient(to right, var(--text-muted) 0 4px, transparent 4px 7px);
+		background: repeating-linear-gradient(to right, var(--faint) 0 4px, transparent 4px 7px);
 	}
 
 	.typical-row {
@@ -478,7 +600,7 @@
 	.amount {
 		flex: none;
 		font-variant-numeric: tabular-nums;
-		color: var(--text-primary);
+		color: var(--foreground);
 	}
 
 	.legend {
@@ -489,7 +611,7 @@
 		padding: 0;
 		list-style: none;
 		font-size: 12px;
-		color: var(--text-secondary);
+		color: var(--muted-foreground);
 	}
 
 	.legend li {
@@ -498,16 +620,30 @@
 		gap: 7px;
 	}
 
+	/* The ramp is drawn in its steps rather than as a gradient: the lines only
+	   ever take one of those five colours, and a smooth bar would promise a
+	   precision the marks do not have. */
+	.ramp {
+		display: flex;
+		border-radius: 2px;
+		overflow: hidden;
+	}
+
+	.tone {
+		width: 14px;
+		height: 6px;
+	}
+
 	figcaption {
 		margin-top: 10px;
 		font-size: 12px;
-		color: var(--text-muted);
+		color: var(--faint);
 	}
 
 	.empty {
 		margin: 0;
 		padding: 48px 0;
 		text-align: center;
-		color: var(--text-muted);
+		color: var(--faint);
 	}
 </style>

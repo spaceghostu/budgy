@@ -9,15 +9,18 @@
 		spansYears,
 		useThousands
 	} from '../format.ts';
+	import { CALENDAR_START, cycleOf } from '../stats/cycle.ts';
 	import type { DailyFlow } from '../types.ts';
 
 	interface Props {
 		days: readonly DailyFlow[];
 		/** True when each bar is a month rather than a day. */
 		monthly?: boolean;
+		/** Day of the month the reader's months open on. */
+		monthStart?: number;
 	}
 
-	const { days, monthly = false }: Props = $props();
+	const { days, monthly = false, monthStart = CALENDAR_START }: Props = $props();
 
 	const MARGIN = { top: 16, right: 20, bottom: 30, left: 68 };
 	const PLOT_HEIGHT = 220;
@@ -77,7 +80,7 @@
 
 	/** A bar is a day or a whole month; say which. */
 	function label(date: string): string {
-		return monthly ? formatMonth(date.slice(0, 7)) : formatDate(date);
+		return monthly ? formatMonth(cycleOf(date, monthStart)) : formatDate(date);
 	}
 
 	function tooltipLeft(centre: number): string {
@@ -133,7 +136,7 @@
 						{#if bar.index % tickEvery === 0}
 							<text class="tick x" x={bar.centre} y={PLOT_HEIGHT + 18} text-anchor="middle">
 								{monthly
-									? formatMonth(bar.day.date.slice(0, 7))
+									? formatMonth(cycleOf(bar.day.date, monthStart))
 									: formatDateShort(bar.day.timestamp, datedYear)}
 							</text>
 						{/if}
@@ -205,7 +208,7 @@
 		align-items: center;
 		gap: 6px;
 		font-size: 12px;
-		color: var(--text-secondary);
+		color: var(--muted-foreground);
 	}
 
 	.swatch {
@@ -256,7 +259,7 @@
 	}
 
 	.tick {
-		fill: var(--text-muted);
+		fill: var(--faint);
 		font-size: 11px;
 		font-variant-numeric: tabular-nums;
 	}
@@ -275,8 +278,8 @@
 		top: 4px;
 		transform: translateX(-50%);
 		min-width: 180px;
-		background: var(--surface-1);
-		border: 1px solid var(--border-strong);
+		background: var(--card);
+		border: 1px solid var(--input);
 		border-radius: var(--radius-md);
 		box-shadow: 0 4px 16px rgba(11, 11, 11, 0.12);
 		padding: 10px 12px;
@@ -289,7 +292,7 @@
 
 	.tooltip-meta {
 		font-size: 12px;
-		color: var(--text-secondary);
+		color: var(--muted-foreground);
 		margin-bottom: 6px !important;
 	}
 
@@ -298,7 +301,7 @@
 		align-items: center;
 		gap: 8px;
 		font-size: 12px;
-		color: var(--text-secondary);
+		color: var(--muted-foreground);
 		padding: 2px 0;
 	}
 
@@ -328,19 +331,19 @@
 		font-size: 13px;
 		font-weight: 600;
 		font-variant-numeric: tabular-nums;
-		color: var(--text-primary);
+		color: var(--foreground);
 	}
 
 	figcaption {
 		margin-top: 10px;
 		font-size: 12px;
-		color: var(--text-muted);
+		color: var(--faint);
 	}
 
 	.empty {
 		margin: 0;
 		padding: 48px 0;
 		text-align: center;
-		color: var(--text-muted);
+		color: var(--faint);
 	}
 </style>

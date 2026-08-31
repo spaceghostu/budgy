@@ -1,29 +1,76 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { AiRequestError, MODEL, requestSpendingReport } from '../ai/client.ts';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import DotIcon from '@lucide/svelte/icons/dot';
+	import TrendingUpIcon from '@lucide/svelte/icons/trending-up';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
+	import { onMount, type Component } from 'svelte';
+	import * as Alert from '$lib/components/ui/alert/index.js';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import * as Card from '$lib/components/ui/card/index.js';
+	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
+	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
+	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import { cn } from '$lib/utils.js';
+	import {
+		AiRequestError,
+		MODEL,
+		requestSpendingReport,
+		type ReportReply,
+		type ReportTurn,
+		type SpendingRequest
+	} from '../ai/client.ts';
+	import { envApiKey, hasEnvKey } from '../ai/env.ts';
 	import { buildAiPayload } from '../ai/payload.ts';
-	import { MAX_NOTE_LENGTH, buildUserPrompt } from '../ai/prompt.ts';
-	import type { SpendingReport } from '../ai/report.ts';
+	import { MAX_NOTE_LENGTH, buildFollowUp, buildUserPrompt } from '../ai/prompt.ts';
 	import { formatDate } from '../format.ts';
+	import { CALENDAR_START } from '../stats/cycle.ts';
 	import type { Tone } from '../stats/highlights.ts';
 	import { clearKey, loadApiKey, saveApiKey } from '../state/persistence.ts';
 	import type { Insights } from '../types.ts';
 
 	interface Props {
 		insights: Insights;
+		/** Day of the month the reader's months open on. */
+		monthStart?: number;
 	}
 
-	const { insights }: Props = $props();
+	const { insights, monthStart = CALENDAR_START }: Props = $props();
 
-	let apiKey = $state('');
+	/**
+	 * A key from `.env` stands in for the reader's own, and where it is set the
+	 * card never asks for one, never reads one from this browser and never writes
+	 * one to it — a key that was configured is not the reader's to keep or clear.
+	 */
+	const configured = hasEnvKey();
+
+	/** Which of the two things that send is in flight, if either. */
+	type Pending = 'read' | 'follow-up';
+
+	let apiKey = $state(envApiKey());
 	let note = $state('');
 	let remember = $state(false);
-	let busy = $state(false);
+	let pending = $state<Pending | null>(null);
 	let error = $state<string | null>(null);
-	let report = $state<SpendingReport | null>(null);
-	let request: AbortController | null = null;
 
-	const payload = $derived(buildAiPayload(insights));
+	/**
+	 * The conversation, oldest first.
+	 *
+	 * Every exchange is kept rather than only the latest answer: a follow-up is
+	 * sent with everything said so far, so that "break that down" means what the
+	 * reader thinks it means. Reading again empties it — that is a new question
+	 * about the figures, not a continuation of the old one.
+	 */
+	let turns = $state<readonly ReportTurn[]>([]);
+
+	/** What the reader has typed in the follow-up box but not yet sent. */
+	let followUp = $state('');
+
+	let inFlight: AbortController | null = null;
+
+	const busy = $derived(pending !== null);
+	const payload = $derived(buildAiPayload(insights, monthStart));
 
 	/**
 	 * The message itself, built eagerly.
@@ -50,19 +97,21 @@
 	 * them.
 	 */
 	const staleReason = $derived.by((): 'figures' | 'question' | null => {
-		if (report === null || sent === null) return null;
+		if (turns.length === 0 || sent === null) return null;
 		if (buildUserPrompt(payload, sent.note) !== sent.preview) return 'figures';
 		return note.trim() === sent.note.trim() ? null : 'question';
 	});
 
 	/** Status never rides on colour alone — the same markers the local highlights use. */
-	const MARKER: Record<Tone, { symbol: string; label: string }> = {
-		neutral: { symbol: '•', label: 'Note' },
-		good: { symbol: '↑', label: 'Good' },
-		warning: { symbol: '!', label: 'Watch' }
+	const MARKER: Record<Tone, { icon: Component; label: string; class: string }> = {
+		neutral: { icon: DotIcon, label: 'Note', class: 'bg-faint text-card' },
+		good: { icon: TrendingUpIcon, label: 'Good', class: 'bg-good text-card' },
+		warning: { icon: TriangleAlertIcon, label: 'Watch', class: 'bg-warning text-[#0b0b0b]' }
 	};
 
 	onMount(() => {
+		if (configured) return;
+
 		const stored = loadApiKey();
 		if (stored === '') return;
 
@@ -84,462 +133,342 @@
 		}
 	}
 
-	async function ask(): Promise<void> {
-		busy = true;
+	/**
+	 * Send, and put anything other than a report in front of the reader.
+	 *
+	 * `null` back means nothing was returned — it failed, or they cancelled — and
+	 * the caller leaves the conversation exactly as it found it. A cancelled
+	 * follow-up loses the request, not the thread it was asked about.
+	 */
+	async function run(
+		kind: Pending,
+		request: Omit<SpendingRequest, 'apiKey' | 'signal'>
+	): Promise<ReportReply | null> {
+		pending = kind;
 		error = null;
-		request = new AbortController();
+		inFlight = new AbortController();
 
 		try {
-			report = await requestSpendingReport({ payload, apiKey, note, signal: request.signal });
-			sent = { preview, note, from: payload.period.from, to: payload.period.to };
+			return await requestSpendingReport({ ...request, apiKey, signal: inFlight.signal });
 		} catch (failure: unknown) {
 			// A cancel is the reader's own doing and is not worth reporting back.
-			if (failure instanceof DOMException && failure.name === 'AbortError') return;
+			if (failure instanceof DOMException && failure.name === 'AbortError') return null;
 
 			error =
 				failure instanceof AiRequestError
 					? failure.message
 					: 'Something went wrong asking Claude. Try again.';
+			return null;
 		} finally {
-			busy = false;
-			request = null;
+			pending = null;
+			inFlight = null;
 		}
 	}
 
-	function cancel(): void {
-		request?.abort();
+	/** Open a conversation about the figures on screen, replacing any before it. */
+	async function ask(): Promise<void> {
+		// Read once, up front: the reader can change the filters while this is in
+		// flight, and what comes back has to be filed under what was sent.
+		const opening = preview;
+		const asked = note;
+		const { from, to } = payload.period;
+
+		const reply = await run('read', { opening });
+		if (reply === null) return;
+
+		turns = [{ question: asked.trim(), ...reply }];
+		sent = { preview: opening, note: asked, from, to };
+		followUp = '';
 	}
+
+	/** Carry on from what Claude has already said, about the same figures. */
+	async function askAgain(): Promise<void> {
+		if (sent === null) return;
+
+		const question = buildFollowUp(followUp);
+		if (question === '') return;
+
+		const reply = await run('follow-up', { opening: sent.preview, turns, question });
+		if (reply === null) return;
+
+		turns = [...turns, { question, ...reply }];
+		followUp = '';
+	}
+
+	function cancel(): void {
+		inFlight?.abort();
+	}
+
+	const hint = 'mt-1 block text-xs font-normal text-faint';
 </script>
 
-<section class="card" aria-labelledby="{id}-title">
-	<header>
-		<div class="heading">
-			<h2 id="{id}-title">Ask Claude</h2>
-			<p class="subtitle">
-				A written read of the period shown above, from {MODEL}.
-			</p>
-		</div>
-	</header>
+<Card.Root role="region" aria-labelledby="{id}-title" class="min-w-0 [--card-spacing:--spacing(5)]">
+	<Card.Header>
+		<Card.Title id="{id}-title" class="text-[15px] font-semibold tracking-[-0.01em]">
+			Ask Claude
+		</Card.Title>
+		<Card.Description class="text-[13px]">
+			A written read of the period shown above, from {MODEL}.
+		</Card.Description>
+	</Card.Header>
 
-	<p class="warning">
-		<strong>This is the one thing on this page that leaves your browser.</strong>
-		Everything else is computed on this device. Press the button and a summary — totals, category and
-		merchant rollups, per-month flow, recurring charges — is sent to Anthropic under your own API key,
-		plus anything you type in the note box, word for word. No descriptions, references, account numbers
-		or counterparties are included, and nothing is sent until you press it.
-	</p>
-
-	<details>
-		<summary>See exactly what would be sent</summary>
-		<pre>{preview}</pre>
-		<p class="hint">
-			This message, plus a fixed set of instructions that never vary with your statement.
-		</p>
-	</details>
-
-	<div class="field">
-		<label for="{id}-note"
-			>What do you want from this read? <span class="optional">Optional</span></label
+	<Card.Content>
+		<p
+			class="rounded-md border border-input bg-muted px-3.5 py-3 text-[13px] text-muted-foreground"
 		>
-		<textarea
-			id="{id}-note"
-			rows="2"
-			maxlength={MAX_NOTE_LENGTH}
-			placeholder="Saving for a deposit in June — what is in the way? · Why was January so much worse than December? · Ignore the medical bills, they were a one-off."
-			value={note}
-			oninput={(event) => (note = event.currentTarget.value)}></textarea>
-		<p class="hint">
-			Steers what Claude looks at. Sent word for word, so leave anything out you would not want to
-			send.
+			<strong class="font-semibold text-foreground">
+				This is the one thing on this page that leaves your browser.
+			</strong>
+			Everything else is computed on this device. Press the button and a summary — totals, category and
+			merchant rollups, per-month flow, recurring charges — is sent to Anthropic under
+			{configured ? 'the API key this build was given' : 'your own API key'}, plus anything you type
+			in the note box, word for word. No descriptions, references, account numbers or counterparties
+			are included, and nothing is sent until you press it.
 		</p>
-	</div>
 
-	<div class="controls">
-		<div class="field">
-			<label for="{id}-key">Your Anthropic API key</label>
-			<input
-				id="{id}-key"
-				type="password"
-				autocomplete="off"
-				spellcheck="false"
-				placeholder="sk-ant-…"
-				value={apiKey}
-				oninput={(event) => setKey(event.currentTarget.value)}
+		<Collapsible.Root class="mt-3 text-[13px] text-muted-foreground">
+			<Collapsible.Trigger
+				class="flex cursor-pointer items-center gap-1 py-1 [&[data-state=open]>svg]:rotate-90"
+			>
+				<ChevronRightIcon class="size-3.5 transition-transform" aria-hidden="true" />
+				See exactly what would be sent
+			</Collapsible.Trigger>
+			<Collapsible.Content>
+				<pre
+					class="mt-2 max-h-80 overflow-auto rounded-md border bg-muted p-3 font-mono text-[11.5px]/[1.5]">{preview}</pre>
+				<p class={hint}>
+					This message, plus a fixed set of instructions that never vary with your statement.
+				</p>
+			</Collapsible.Content>
+		</Collapsible.Root>
+
+		<div class="mt-4 min-w-0">
+			<Label for="{id}-note" class="mb-1 text-xs font-semibold text-muted-foreground">
+				What do you want from this read? <span class="font-normal text-faint">Optional</span>
+			</Label>
+			<Textarea
+				id="{id}-note"
+				rows={2}
+				maxlength={MAX_NOTE_LENGTH}
+				class="resize-y bg-background text-[13px]"
+				placeholder="Saving for a deposit in June — what is in the way? · Why was January so much worse than December? · Ignore the medical bills, they were a one-off."
+				value={note}
+				oninput={(event) => (note = event.currentTarget.value)}
 			/>
-			<p class="hint">
-				From <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer"
-					>console.anthropic.com</a
-				>. Calls are billed to that key.
+			<p class={hint}>
+				Steers what Claude looks at. Sent word for word, so leave anything out you would not want to
+				send.
 			</p>
 		</div>
 
-		{#if busy}
-			<button type="button" class="secondary" onclick={cancel}>Cancel</button>
-		{:else}
-			<button
-				type="button"
-				class="primary"
-				disabled={apiKey.trim() === ''}
-				onclick={() => void ask()}
-			>
-				{report === null ? 'Read my spending' : 'Read it again'}
-			</button>
+		<div class="mt-3.5 flex flex-wrap items-start gap-3">
+			<div class="min-w-0 flex-1 basis-65">
+				{#if configured}
+					<p class="mb-1 text-xs font-semibold text-muted-foreground">Anthropic API key</p>
+					<p class="text-[13px] text-muted-foreground">Using the key this build was given.</p>
+					<p class={hint}>
+						Read from <code class="font-mono">ANTHROPIC_API_KEY</code> in
+						<code class="font-mono">.env</code> when this bundle was built. Calls are billed to that key.
+						Unset it and this card asks each reader for their own.
+					</p>
+				{:else}
+					<Label for="{id}-key" class="mb-1 text-xs font-semibold text-muted-foreground">
+						Your Anthropic API key
+					</Label>
+					<Input
+						id="{id}-key"
+						type="password"
+						autocomplete="off"
+						spellcheck="false"
+						placeholder="sk-ant-…"
+						class="w-full bg-background font-mono text-[13px]"
+						value={apiKey}
+						oninput={(event) => setKey(event.currentTarget.value)}
+					/>
+					<p class={hint}>
+						From <a
+							href="https://console.anthropic.com/settings/keys"
+							target="_blank"
+							rel="noreferrer"
+						>
+							console.anthropic.com
+						</a>. Calls are billed to that key.
+					</p>
+				{/if}
+			</div>
+
+			{#if pending === 'read'}
+				<Button
+					variant="outline"
+					size="lg"
+					class="mt-4.5 border-input font-semibold"
+					onclick={cancel}
+				>
+					Cancel
+				</Button>
+			{:else}
+				<!-- The one blue button on the page, for the one action that sends. -->
+				<Button
+					size="lg"
+					class="mt-4.5 bg-series font-semibold text-white hover:bg-series/90"
+					disabled={busy || apiKey.trim() === ''}
+					onclick={() => void ask()}
+				>
+					{turns.length === 0 ? 'Read my spending' : 'Start again'}
+				</Button>
+			{/if}
+		</div>
+
+		{#if !configured}
+			<div class="mt-3.5 flex items-start gap-2">
+				<Checkbox
+					id="{id}-remember"
+					class="mt-0.5"
+					checked={remember}
+					onCheckedChange={(next) => setRemember(next === true)}
+				/>
+				<Label for="{id}-remember" class="block text-[13px] font-normal text-muted-foreground">
+					Keep this key in this browser
+					<span class="{hint} max-w-[60ch]">
+						Off by default — a key is a credential, and local storage is readable by anyone at this
+						browser. Left off, it is forgotten on reload.
+					</span>
+				</Label>
+			</div>
 		{/if}
-	</div>
 
-	<label class="remember">
-		<input
-			type="checkbox"
-			checked={remember}
-			onchange={(event) => setRemember(event.currentTarget.checked)}
-		/>
-		<span>
-			Keep this key in this browser
-			<span class="hint">
-				Off by default — a key is a credential, and local storage is readable by anyone at this
-				browser. Left off, it is forgotten on reload.
-			</span>
-		</span>
-	</label>
-
-	<div class="result" aria-live="polite" aria-busy={busy}>
-		{#if busy}
-			<p class="status">Reading {payload.totals.transactionCount} transactions…</p>
-		{:else if error !== null}
-			<p class="banner" role="alert">{error}</p>
-		{:else if report !== null}
-			{#if staleReason !== null}
-				<p class="stale">
-					{#if staleReason === 'figures'}
-						This read describes {formatDate(sent?.from ?? '')} to {formatDate(sent?.to ?? '')}. The
-						figures on screen have changed since — read it again to catch up.
-					{:else}
-						You have changed what you asked since this was written — read it again for an answer to
-						the new question.
-					{/if}
+		<div
+			class="not-empty:mt-4.5 not-empty:border-t not-empty:pt-4"
+			aria-live="polite"
+			aria-busy={busy}
+		>
+			{#if pending === 'read'}
+				<p class="text-[13px] text-muted-foreground">
+					Reading {payload.totals.transactionCount} transactions…
 				</p>
-			{/if}
+			{:else}
+				{#if staleReason !== null}
+					<p
+						class="mb-3 rounded-md border border-warning px-3 py-2.5 text-[12.5px] text-muted-foreground"
+					>
+						{#if staleReason === 'figures'}
+							This conversation is about {formatDate(sent?.from ?? '')} to {formatDate(
+								sent?.to ?? ''
+							)}. The figures on screen have changed since — follow-ups carry on about the earlier
+							period, so start again to catch up.
+						{:else}
+							You have changed what you asked since this was written — start again for a fresh read
+							of the new question, or ask it as a follow-up below.
+						{/if}
+					</p>
+				{/if}
 
-			<p class="headline">{report.headline}</p>
+				<!-- Keyed by index: the conversation only ever grows, and a model asked
+				     twice about fees can answer with the same headline both times. -->
+				{#each turns as turn, index (index)}
+					<div class={index === 0 ? '' : 'mt-5 border-t pt-4'}>
+						{#if turn.question !== ''}
+							<p class="mb-2.5 flex gap-2 text-[13px] text-muted-foreground">
+								<span class="font-semibold text-foreground">You asked</span>
+								<span>{turn.question}</span>
+							</p>
+						{/if}
 
-			<!-- Keyed by index: the titles are written by a model, and two findings
-			     called "Bank fees" is an ordinary thing for it to return. -->
-			<ul class="findings">
-				{#each report.findings as finding, index (index)}
-					<li class={finding.tone}>
-						<span class="marker" aria-hidden="true">{MARKER[finding.tone].symbol}</span>
-						<span class="sr-only">{MARKER[finding.tone].label}:</span>
-						<div>
-							<h3>{finding.title}</h3>
-							<p>{finding.detail}</p>
-						</div>
-					</li>
+						<p class="mb-3.5 text-[15px] font-semibold tracking-[-0.01em]">
+							{turn.report.headline}
+						</p>
+
+						<!-- Keyed by index: the titles are written by a model, and two findings
+						     called "Bank fees" is an ordinary thing for it to return. -->
+						<ul class="grid list-none gap-2.5 p-0">
+							{#each turn.report.findings as finding, position (position)}
+								{@const marker = MARKER[finding.tone]}
+								{@const Icon = marker.icon}
+								<li class="flex items-start gap-2.5 rounded-md border bg-muted px-3.5 py-3">
+									<span
+										class={cn(
+											'grid size-5 flex-none place-items-center rounded-full',
+											marker.class
+										)}
+										aria-hidden="true"
+									>
+										<Icon class="size-3" />
+									</span>
+									<span class="sr-only">{marker.label}:</span>
+									<div>
+										<h3 class="mb-0.5 text-[13px] font-semibold">{finding.title}</h3>
+										<p class="text-[13.5px] text-muted-foreground">{finding.detail}</p>
+									</div>
+								</li>
+							{/each}
+						</ul>
+
+						{#if turn.report.actions.length > 0}
+							<h3 class="mt-4 mb-1.5 text-[13px] font-semibold">What you could do</h3>
+							<ul class="grid list-disc gap-1.25 pl-5 text-[13.5px] text-muted-foreground">
+								{#each turn.report.actions as action, position (position)}
+									<li>{action}</li>
+								{/each}
+							</ul>
+						{/if}
+					</div>
 				{/each}
-			</ul>
 
-			{#if report.actions.length > 0}
-				<h3 class="actions-heading">What you could do</h3>
-				<ul class="actions">
-					{#each report.actions as action, index (index)}
-						<li>{action}</li>
-					{/each}
-				</ul>
+				{#if pending === 'follow-up'}
+					<p class="mt-5 border-t pt-4 text-[13px] text-muted-foreground">Reading your question…</p>
+				{/if}
+
+				{#if error !== null}
+					<Alert.Root
+						variant="destructive"
+						class={cn('border-destructive text-[13px]', turns.length > 0 && 'mt-4')}
+					>
+						<Alert.Description class="text-destructive">{error}</Alert.Description>
+					</Alert.Root>
+				{/if}
+
+				{#if turns.length > 0}
+					<div class="mt-4.5 border-t pt-4">
+						<Label for="{id}-follow-up" class="mb-1 text-xs font-semibold text-muted-foreground">
+							Ask a follow-up
+						</Label>
+						<Textarea
+							id="{id}-follow-up"
+							rows={2}
+							maxlength={MAX_NOTE_LENGTH}
+							class="resize-y bg-background text-[13px]"
+							placeholder="Break down those bank fees. · Which of those subscriptions is the newest? · What would cutting the takeaways in half be worth over a year?"
+							value={followUp}
+							oninput={(event) => (followUp = event.currentTarget.value)}
+						/>
+						<div class="mt-2 flex flex-wrap items-start justify-between gap-3">
+							<p class="{hint} mt-0 max-w-[60ch]">
+								Sends this whole conversation again — the same figures, every question you have
+								asked and every answer above — plus what you type here. No new figures are sent.
+							</p>
+							{#if pending === 'follow-up'}
+								<Button variant="outline" class="border-input font-semibold" onclick={cancel}>
+									Cancel
+								</Button>
+							{:else}
+								<Button
+									variant="outline"
+									class="border-input font-semibold"
+									disabled={busy || followUp.trim() === ''}
+									onclick={() => void askAgain()}
+								>
+									Ask
+								</Button>
+							{/if}
+						</div>
+					</div>
+
+					<p class="mt-4 border-t pt-3 text-xs text-faint">
+						Written by a language model from the figures above. It can be wrong — every number it
+						quotes is checkable against the tables on this page.
+					</p>
+				{/if}
 			{/if}
-
-			<p class="caveat">
-				Written by a language model from the figures above. It can be wrong — every number it quotes
-				is checkable against the tables on this page.
-			</p>
-		{/if}
-	</div>
-</section>
-
-<style>
-	.card {
-		background: var(--surface-1);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		box-shadow: var(--shadow-card);
-		padding: 20px;
-		min-width: 0;
-	}
-
-	header {
-		margin-bottom: 14px;
-	}
-
-	h2 {
-		margin: 0;
-		font-size: 15px;
-		font-weight: 600;
-		letter-spacing: -0.01em;
-	}
-
-	.subtitle {
-		margin: 2px 0 0;
-		font-size: 13px;
-		color: var(--text-secondary);
-	}
-
-	.warning {
-		margin: 0 0 12px;
-		padding: 11px 14px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--surface-2);
-		font-size: 13px;
-		color: var(--text-secondary);
-	}
-
-	.warning strong {
-		color: var(--text-primary);
-		font-weight: 600;
-	}
-
-	details {
-		font-size: 13px;
-		color: var(--text-secondary);
-		margin-bottom: 16px;
-	}
-
-	summary {
-		cursor: pointer;
-		padding: 4px 0;
-	}
-
-	pre {
-		margin: 8px 0 0;
-		padding: 12px;
-		max-height: 320px;
-		overflow: auto;
-		background: var(--surface-2);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		font-family: var(--font-mono);
-		font-size: 11.5px;
-		line-height: 1.5;
-		color: var(--text-secondary);
-	}
-
-	.controls {
-		display: flex;
-		align-items: flex-start;
-		gap: 12px;
-		flex-wrap: wrap;
-		margin-top: 14px;
-	}
-
-	.field {
-		flex: 1 1 260px;
-		min-width: 0;
-	}
-
-	.optional {
-		font-weight: 400;
-		color: var(--text-muted);
-	}
-
-	textarea {
-		width: 100%;
-		padding: 8px 10px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--page);
-		color: var(--text-primary);
-		font-family: inherit;
-		font-size: 13px;
-		line-height: 1.5;
-		resize: vertical;
-	}
-
-	label {
-		display: block;
-		font-size: 12px;
-		font-weight: 600;
-		color: var(--text-secondary);
-		margin-bottom: 4px;
-	}
-
-	input[type='password'] {
-		width: 100%;
-		padding: 7px 10px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--page);
-		color: var(--text-primary);
-		font-family: var(--font-mono);
-		font-size: 13px;
-	}
-
-	.hint {
-		display: block;
-		margin: 4px 0 0;
-		font-size: 12px;
-		font-weight: 400;
-		color: var(--text-muted);
-	}
-
-	button {
-		margin-top: 18px;
-		padding: 8px 14px;
-		border-radius: var(--radius-md);
-		border: 1px solid var(--border-strong);
-		font-size: 13px;
-		font-weight: 600;
-		cursor: pointer;
-	}
-
-	button:disabled {
-		cursor: not-allowed;
-		opacity: 0.55;
-	}
-
-	.primary {
-		background: var(--series-1);
-		border-color: var(--series-1);
-		color: #ffffff;
-	}
-
-	.secondary {
-		background: var(--surface-1);
-		color: var(--text-primary);
-	}
-
-	.remember {
-		display: flex;
-		align-items: flex-start;
-		gap: 8px;
-		margin-top: 14px;
-		font-size: 13px;
-		font-weight: 400;
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-
-	.remember .hint {
-		max-width: 60ch;
-	}
-
-	.result:not(:empty) {
-		margin-top: 18px;
-		padding-top: 16px;
-		border-top: 1px solid var(--border);
-	}
-
-	.status {
-		margin: 0;
-		font-size: 13px;
-		color: var(--text-secondary);
-	}
-
-	.banner {
-		margin: 0;
-		padding: 11px 14px;
-		border: 1px solid var(--status-critical);
-		border-radius: var(--radius-md);
-		font-size: 13px;
-	}
-
-	.stale {
-		margin: 0 0 12px;
-		padding: 10px 12px;
-		border: 1px solid var(--status-warning);
-		border-radius: var(--radius-md);
-		font-size: 12.5px;
-		color: var(--text-secondary);
-	}
-
-	.headline {
-		margin: 0 0 14px;
-		font-size: 15px;
-		font-weight: 600;
-		letter-spacing: -0.01em;
-	}
-
-	.findings {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: grid;
-		gap: 10px;
-	}
-
-	.findings li {
-		display: flex;
-		align-items: flex-start;
-		gap: 10px;
-		background: var(--surface-2);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		padding: 12px 14px;
-	}
-
-	.findings h3 {
-		margin: 0 0 3px;
-		font-size: 13px;
-		font-weight: 600;
-	}
-
-	.findings p {
-		margin: 0;
-		font-size: 13.5px;
-		color: var(--text-secondary);
-	}
-
-	.marker {
-		flex: none;
-		display: grid;
-		place-items: center;
-		width: 20px;
-		height: 20px;
-		border-radius: 50%;
-		font-size: 12px;
-		font-weight: 700;
-		line-height: 1;
-		color: var(--surface-1);
-		background: var(--text-muted);
-	}
-
-	.findings li.good .marker {
-		background: var(--status-good);
-	}
-
-	.findings li.warning .marker {
-		background: var(--status-warning);
-		color: #0b0b0b;
-	}
-
-	.actions-heading {
-		margin: 16px 0 6px;
-		font-size: 13px;
-		font-weight: 600;
-	}
-
-	.actions {
-		margin: 0;
-		padding-left: 20px;
-		display: grid;
-		gap: 5px;
-		font-size: 13.5px;
-		color: var(--text-secondary);
-	}
-
-	.caveat {
-		margin: 16px 0 0;
-		padding-top: 12px;
-		border-top: 1px solid var(--border);
-		font-size: 12px;
-		color: var(--text-muted);
-	}
-
-	.sr-only {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		padding: 0;
-		margin: -1px;
-		overflow: hidden;
-		clip-path: inset(50%);
-		white-space: nowrap;
-	}
-</style>
+		</div>
+	</Card.Content>
+</Card.Root>

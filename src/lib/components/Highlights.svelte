@@ -1,4 +1,9 @@
 <script lang="ts">
+	import DotIcon from '@lucide/svelte/icons/dot';
+	import TrendingUpIcon from '@lucide/svelte/icons/trending-up';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
+	import type { Component } from 'svelte';
+	import { cn } from '$lib/utils.js';
 	import type { Highlight } from '../stats/highlights.ts';
 
 	interface Props {
@@ -8,81 +13,28 @@
 	const { highlights }: Props = $props();
 
 	/** Status never rides on colour alone — every tone ships an icon and a label. */
-	const MARKER: Record<Highlight['tone'], { symbol: string; label: string }> = {
-		neutral: { symbol: '•', label: 'Note' },
-		good: { symbol: '↑', label: 'Good' },
-		warning: { symbol: '!', label: 'Watch' }
+	const MARKER: Record<Highlight['tone'], { icon: Component; label: string; class: string }> = {
+		neutral: { icon: DotIcon, label: 'Note', class: 'bg-faint text-card' },
+		good: { icon: TrendingUpIcon, label: 'Good', class: 'bg-good text-card' },
+		warning: { icon: TriangleAlertIcon, label: 'Watch', class: 'bg-warning text-[#0b0b0b]' }
 	};
 </script>
 
 {#if highlights.length > 0}
-	<ul>
+	<ul class="grid list-none gap-2.5 p-0">
 		{#each highlights as highlight (highlight.id)}
-			<li class={highlight.tone}>
-				<span class="marker" aria-hidden="true">{MARKER[highlight.tone].symbol}</span>
-				<span class="sr-only">{MARKER[highlight.tone].label}:</span>
-				<p>{highlight.text}</p>
+			{@const marker = MARKER[highlight.tone]}
+			{@const Icon = marker.icon}
+			<li class="flex items-start gap-2.5 rounded-md border bg-card px-3.5 py-3">
+				<span
+					class={cn('grid size-5 flex-none place-items-center rounded-full', marker.class)}
+					aria-hidden="true"
+				>
+					<Icon class="size-3" />
+				</span>
+				<span class="sr-only">{marker.label}:</span>
+				<p class="text-[13.5px] text-muted-foreground">{highlight.text}</p>
 			</li>
 		{/each}
 	</ul>
 {/if}
-
-<style>
-	ul {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: grid;
-		gap: 10px;
-	}
-
-	li {
-		display: flex;
-		align-items: flex-start;
-		gap: 10px;
-		background: var(--surface-1);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		padding: 12px 14px;
-	}
-
-	p {
-		margin: 0;
-		font-size: 13.5px;
-		color: var(--text-secondary);
-	}
-
-	.marker {
-		flex: none;
-		display: grid;
-		place-items: center;
-		width: 20px;
-		height: 20px;
-		border-radius: 50%;
-		font-size: 12px;
-		font-weight: 700;
-		line-height: 1;
-		color: var(--surface-1);
-		background: var(--text-muted);
-	}
-
-	li.good .marker {
-		background: var(--status-good);
-	}
-
-	li.warning .marker {
-		background: var(--status-warning);
-		color: #0b0b0b;
-	}
-
-	.sr-only {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		padding: 0;
-		margin: -1px;
-		overflow: hidden;
-		clip-path: inset(50%);
-		white-space: nowrap;
-	}
-</style>

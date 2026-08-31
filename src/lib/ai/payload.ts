@@ -15,6 +15,7 @@
  */
 
 import { groupFlowByMonth, round } from '../stats/balance.ts';
+import { CALENDAR_START, cycleOf } from '../stats/cycle.ts';
 import type { Bucket, Insights, RecurringCharge, Transaction } from '../types.ts';
 
 /**
@@ -89,6 +90,14 @@ export interface AiPayload {
 		readonly transactionCount: number;
 	};
 	readonly spendPerDay: { readonly mean: number; readonly median: number };
+	/**
+	 * The day of the month the reader's months open on, when it is not the 1st.
+	 *
+	 * Left out at the 1st, where a month is what anyone would assume. Present, it
+	 * says that "2026-08" in `months` is the reader's August — 25 July to 24
+	 * August for a start of the 25th — so the model's wording matches the charts.
+	 */
+	readonly monthStartDay?: number;
 	readonly months: readonly AiMonth[];
 	readonly categories: readonly AiBucket[];
 	readonly merchants: readonly AiBucket[];
@@ -102,8 +111,12 @@ export interface AiPayload {
  * Takes the same {@link Insights} every card on the page renders, so the model
  * is shown the period currently filtered rather than the whole file — what is
  * on screen and what is asked about stay the same thing.
+ *
+ * @param start Day of the month a month opens on. The model is told what the
+ * reader's months are, so an answer about "August" means the same span of days
+ * the charts drew for August.
  */
-export function buildAiPayload(insights: Insights): AiPayload {
+export function buildAiPayload(insights: Insights, start: number = CALENDAR_START): AiPayload {
 	const { summary } = insights;
 
 	return {
@@ -124,8 +137,9 @@ export function buildAiPayload(insights: Insights): AiPayload {
 			transactionCount: summary.transactionCount
 		},
 		spendPerDay: { mean: summary.meanDailySpend, median: summary.medianDailySpend },
-		months: groupFlowByMonth(insights.dailyFlow).map((month) => ({
-			month: month.date.slice(0, 7),
+		...(start === CALENDAR_START ? {} : { monthStartDay: start }),
+		months: groupFlowByMonth(insights.dailyFlow, start).map((month) => ({
+			month: cycleOf(month.date, start),
 			income: month.income,
 			expense: month.expense,
 			net: month.net

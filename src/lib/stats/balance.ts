@@ -1,4 +1,5 @@
 import type { BalancePoint, DailyFlow, Transaction } from '../types.ts';
+import { CALENDAR_START, cycleOf, cycleOpening } from './cycle.ts';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -22,9 +23,7 @@ export function buildBalanceSeries(
 	closingBalance: number
 ): readonly BalancePoint[] {
 	if (transactions.length === 0) return [];
-	if (hasPrintedBalances(transactions) && isOneAccount(transactions)) {
-		return fromPrintedBalances(transactions);
-	}
+	if (usesPrintedBalances(transactions)) return fromPrintedBalances(transactions);
 
 	const opening = closingBalance - sumAmounts(transactions);
 
@@ -43,6 +42,19 @@ export function buildBalanceSeries(
 	});
 
 	return [start, ...points];
+}
+
+/**
+ * True when the series will be the bank's own record rather than one unwound
+ * from an anchor — every row carries a printed balance, and they all belong to
+ * one account.
+ *
+ * Exported because a caller has to be able to say whether the figure it just
+ * read is real money or a shape, and asking the same question a second way
+ * would eventually answer it differently from {@link buildBalanceSeries}.
+ */
+export function usesPrintedBalances(transactions: readonly Transaction[]): boolean {
+	return hasPrintedBalances(transactions) && isOneAccount(transactions);
 }
 
 /**
@@ -132,11 +144,14 @@ export function buildDailyFlow(
  * years it is six hundred hairlines, where no single bar can be read and the
  * shape says less than a monthly one would.
  */
-export function groupFlowByMonth(days: readonly DailyFlow[]): readonly DailyFlow[] {
+export function groupFlowByMonth(
+	days: readonly DailyFlow[],
+	start: number = CALENDAR_START
+): readonly DailyFlow[] {
 	const months = new Map<string, { income: number; expense: number; closingBalance: number }>();
 
 	for (const day of days) {
-		const key = day.date.slice(0, 7);
+		const key = cycleOf(day.date, start);
 		const month = months.get(key) ?? { income: 0, expense: 0, closingBalance: 0 };
 		months.set(key, {
 			income: month.income + day.income,
@@ -146,14 +161,19 @@ export function groupFlowByMonth(days: readonly DailyFlow[]): readonly DailyFlow
 		});
 	}
 
-	return [...months.entries()].map(([month, totals]) => ({
-		date: `${month}-01`,
-		timestamp: new Date(`${month}-01T00:00:00`).getTime(),
-		income: round(totals.income),
-		expense: round(totals.expense),
-		net: round(totals.income - totals.expense),
-		closingBalance: totals.closingBalance
-	}));
+	return [...months.entries()].map(([month, totals]) => {
+		// Stamped with the day the month opened, so a bar sits where its money did.
+		const opening = cycleOpening(month, start);
+
+		return {
+			date: opening,
+			timestamp: new Date(`${opening}T00:00:00`).getTime(),
+			income: round(totals.income),
+			expense: round(totals.expense),
+			net: round(totals.income - totals.expense),
+			closingBalance: totals.closingBalance
+		};
+	});
 }
 
 /** Whole days covered by the period, counting both endpoints. */

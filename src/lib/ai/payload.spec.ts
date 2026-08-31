@@ -23,6 +23,26 @@ describe('buildAiPayload', () => {
 		expect(payload.totals).toMatchObject({ income: 5000, expense: 400, net: 4600 });
 	});
 
+	it('says nothing about months while they are the calendar’s', () => {
+		const payload = buildAiPayload(
+			insightsFor([makeTransaction({ date: '2026-01-05', amount: -400 })])
+		);
+
+		expect(payload.monthStartDay).toBeUndefined();
+	});
+
+	it('tells the model which days the reader’s months cover', () => {
+		const transactions = [
+			makeTransaction({ date: '2026-01-05', amount: -400 }),
+			makeTransaction({ date: '2026-01-26', amount: -600 })
+		];
+		const payload = buildAiPayload(buildInsights(transactions, 1000, 25), 25);
+
+		expect(payload.monthStartDay).toBe(25);
+		// The 5th belongs to January's cycle, the 26th opens February's.
+		expect(payload.months.map((month) => month.month)).toEqual(['2026-01', '2026-02']);
+	});
+
 	it('sends category and merchant totals, biggest first', () => {
 		resetTransactionIds();
 		const payload = buildAiPayload(

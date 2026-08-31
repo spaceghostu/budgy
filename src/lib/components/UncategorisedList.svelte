@@ -1,10 +1,8 @@
 <script lang="ts">
-	import {
-		MAX_CATEGORY_LENGTH,
-		resolveCategory,
-		type AppliedRule,
-		type MerchantGroup
-	} from '../categorise.ts';
+	import XIcon from '@lucide/svelte/icons/x';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import CategoryPicker from './CategoryPicker.svelte';
+	import type { AppliedRule, MerchantGroup } from '../categorise.ts';
 	import { formatCount, formatCurrency, formatDate } from '../format.ts';
 
 	interface Props {
@@ -13,11 +11,13 @@
 		/** The choices already made, whether or not this period shows them. */
 		applied: readonly AppliedRule[];
 		options: readonly string[];
+		/** The categories last chosen, most recent first — the picker's shortlist. */
+		recent?: readonly string[];
 		/** A blank takes the merchant's choice back off again. */
 		onassign: (merchant: string, category: string) => void;
 	}
 
-	const { pending, applied, options, onassign }: Props = $props();
+	const { pending, applied, options, recent = [], onassign }: Props = $props();
 
 	/**
 	 * Merchants shown before the "show all" control appears.
@@ -30,395 +30,115 @@
 
 	let expanded = $state(false);
 
-	/** The one merchant, if any, having a category typed for it. */
-	let naming = $state<string | null>(null);
-	let draft = $state('');
-
 	const visible = $derived(expanded ? pending : pending.slice(0, PAGE_SIZE));
 	const total = $derived(pending.reduce((sum, group) => sum + group.total, 0));
 
-	/**
-	 * What the typed name would file under — the existing category when there
-	 * already is one by that name, so the same spending cannot end up split
-	 * across two spellings of it.
-	 */
-	const resolved = $derived(resolveCategory(draft, options));
-
-	/** Said while it is being typed, rather than swallowing the name on submit. */
-	const problem = $derived(
-		draft.trim() === '' || resolved !== null
-			? null
-			: 'Uncategorised is what these rows already are. Give it another name.'
-	);
-
-	const isNew = $derived(
-		resolved !== null && !options.some((option) => option === resolved) ? resolved : null
-	);
-
-	function open(merchant: string): void {
-		naming = merchant;
-		draft = '';
-	}
-
-	function close(): void {
-		naming = null;
-		draft = '';
-	}
-
-	function add(merchant: string): void {
-		if (resolved === null) return;
-
-		onassign(merchant, resolved);
-		close();
-	}
-
-	function keys(event: KeyboardEvent, merchant: string): void {
-		if (event.key === 'Enter') {
-			event.preventDefault();
-			add(merchant);
-		}
-		if (event.key === 'Escape') close();
-	}
-
-	/** Put the cursor where the reader has just said they want to type. */
-	function takeFocus(node: HTMLInputElement): void {
-		node.focus();
-	}
+	const quietButton =
+		'border-input text-muted-foreground hover:border-series hover:text-foreground';
 </script>
 
-<!-- The picker for one merchant: the categories that exist, or a name of your
-     own. Shared by both lists, so one can be made from either. -->
-{#snippet picker(merchant: string, current: string)}
-	{#if naming === merchant}
-		<div class="naming">
-			<div class="entry">
-				<input
-					type="text"
-					aria-label="New category ({merchant})"
-					placeholder="Name the category"
-					maxlength={MAX_CATEGORY_LENGTH}
-					bind:value={draft}
-					onkeydown={(event) => keys(event, merchant)}
-					use:takeFocus
-				/>
-				<button type="button" disabled={resolved === null} onclick={() => add(merchant)}>
-					Add
-				</button>
-				<button type="button" class="plain" onclick={close}>Cancel</button>
-			</div>
-
-			{#if problem !== null}
-				<p class="problem" role="alert">{problem}</p>
-			{:else if isNew === null && resolved !== null}
-				<p class="problem">There is already a {resolved} — this files it there.</p>
-			{/if}
-		</div>
-	{:else}
-		<select
-			aria-label="Category for {merchant}"
-			value={current}
-			onchange={(event) => onassign(merchant, event.currentTarget.value)}
-		>
-			{#if current === ''}
-				<option value="">Choose a category…</option>
-			{:else if !options.includes(current)}
-				<!-- A choice made against an earlier statement can name a category
-				     these files never use. It still has to show what it is. -->
-				<option value={current}>{current}</option>
-			{/if}
-			{#each options as option (option)}
-				<option value={option}>{option}</option>
-			{/each}
-		</select>
-
-		<button
-			type="button"
-			class="new"
-			aria-label="New category ({merchant})"
-			onclick={() => open(merchant)}
-		>
-			+ New
-		</button>
-	{/if}
-{/snippet}
-
 {#if pending.length > 0}
-	<p class="lede">
+	<p class="text-[13px] text-muted-foreground">
 		{formatCurrency(total)} across {formatCount(pending.length, 'merchant')} has no category, so the breakdowns
 		cannot place it. Choosing one files every transaction from that merchant — in this statement and in
 		next month's.
 	</p>
 
-	<ul class="pending">
+	<ul class="mt-3.5 flex list-none flex-col p-0">
 		{#each visible as group (group.merchant)}
-			<li>
-				<div class="who">
-					<span class="merchant" title={group.merchant}>{group.merchant}</span>
-					<span class="meta">
+			<li
+				class="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b py-2.5 first:border-t"
+			>
+				<div class="flex min-w-0 flex-col gap-0.5">
+					<span class="truncate text-[13px]" title={group.merchant}>{group.merchant}</span>
+					<span class="text-xs text-faint">
 						{formatCount(group.count, 'transaction')} · {formatCurrency(group.total)} · last
 						{formatDate(group.lastSeen)}
 					</span>
 					<!-- The merchant name is the description with its reference numbers
 					     stripped, which can leave a code. The line it came from says more. -->
 					{#if group.example !== '' && group.example !== group.merchant}
-						<span class="example" title={group.example}>{group.example}</span>
+						<span class="max-w-[42ch] truncate text-xs text-faint" title={group.example}>
+							{group.example}
+						</span>
 					{/if}
 				</div>
 
-				<div class="choose">
+				<div class="flex flex-none items-center gap-2 max-[560px]:w-full">
 					<!-- Where the same merchant is filed elsewhere in the statement — the
 					     usual case for a row the two files could not match — that answer
 					     is one press away rather than a hunt through the list. -->
-					{#if group.suggestion !== null && naming !== group.merchant}
+					{#if group.suggestion !== null}
 						{@const suggestion = group.suggestion}
-						<button
-							type="button"
-							class="suggestion"
+						<Button
+							variant="outline"
+							size="xs"
+							class={quietButton}
 							onclick={() => onassign(group.merchant, suggestion)}
 						>
 							Use {suggestion}
-						</button>
+						</Button>
 					{/if}
 
-					{@render picker(group.merchant, '')}
+					<CategoryPicker merchant={group.merchant} {options} {recent} {onassign} />
 				</div>
 			</li>
 		{/each}
 	</ul>
 
 	{#if pending.length > PAGE_SIZE}
-		<button class="more" type="button" onclick={() => (expanded = !expanded)}>
+		<Button
+			variant="outline"
+			size="xs"
+			class="mt-3 {quietButton}"
+			onclick={() => (expanded = !expanded)}
+		>
 			{expanded ? 'Show fewer' : `Show all ${pending.length}`}
-		</button>
+		</Button>
 	{/if}
 {:else}
-	<p class="done">Every transaction in this period is filed under something.</p>
+	<p class="py-2 text-[13px] text-muted-foreground">
+		Every transaction in this period is filed under something.
+	</p>
 {/if}
 
 {#if applied.length > 0}
-	<section class="applied">
-		<h3>Your categories</h3>
-		<p class="note">Kept on this device, and applied to every statement you open here.</p>
+	<section class="mt-5 border-t pt-4">
+		<h3 class="text-[13px] font-semibold">Your categories</h3>
+		<p class="text-[13px] text-muted-foreground">
+			Kept on this device, and applied to every statement you open here.
+		</p>
 
-		<ul>
+		<ul class="mt-3.5 flex list-none flex-col p-0">
 			{#each applied as rule (rule.merchant)}
-				<li>
-					<span class="merchant" title={rule.merchant}>{rule.merchant}</span>
+				<li class="flex items-center gap-2.5 py-1.5">
+					<span class="min-w-0 flex-1 truncate text-[13px]" title={rule.merchant}>
+						{rule.merchant}
+					</span>
 
-					{@render picker(rule.merchant, rule.category)}
+					<CategoryPicker
+						merchant={rule.merchant}
+						current={rule.category}
+						{options}
+						{recent}
+						{onassign}
+					/>
 
-					<span class="meta">
+					<span class="flex-none text-right text-xs text-faint max-[560px]:hidden">
 						{rule.count === 0 ? 'nothing in these files' : formatCount(rule.count, 'transaction')}
 					</span>
 
-					<button
-						type="button"
-						class="remove"
+					<Button
+						variant="ghost"
+						size="icon-xs"
+						class="flex-none text-faint hover:border-destructive hover:text-foreground"
 						aria-label="Clear the choice for {rule.merchant}"
 						onclick={() => onassign(rule.merchant, '')}
 					>
-						✕
-					</button>
+						<XIcon aria-hidden="true" />
+					</Button>
 				</li>
 			{/each}
 		</ul>
 	</section>
 {/if}
-
-<style>
-	.lede,
-	.done,
-	.note {
-		margin: 0;
-		font-size: 13px;
-		color: var(--text-secondary);
-	}
-
-	.done {
-		padding: 8px 0;
-	}
-
-	ul {
-		list-style: none;
-		margin: 14px 0 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-	}
-
-	.pending li {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px 16px;
-		flex-wrap: wrap;
-		padding: 10px 0;
-		border-bottom: 1px solid var(--border);
-	}
-
-	.pending li:first-child {
-		border-top: 1px solid var(--border);
-	}
-
-	.who {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		min-width: 0;
-	}
-
-	.merchant {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		font-size: 13px;
-		color: var(--text-primary);
-	}
-
-	.meta,
-	.example {
-		font-size: 12px;
-		color: var(--text-muted);
-	}
-
-	.example {
-		max-width: 42ch;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.choose {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		flex: none;
-	}
-
-	select,
-	input {
-		padding: 6px 10px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--surface-1);
-		font-size: 13px;
-		max-width: 15rem;
-	}
-
-	.naming {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		min-width: 0;
-	}
-
-	.entry {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-
-	.problem {
-		margin: 0;
-		font-size: 12px;
-		color: var(--text-muted);
-	}
-
-	.suggestion,
-	.new,
-	.entry button,
-	.more {
-		padding: 6px 11px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--surface-1);
-		font-size: 12px;
-		color: var(--text-secondary);
-		white-space: nowrap;
-		cursor: pointer;
-	}
-
-	.suggestion:hover,
-	.new:hover,
-	.entry button:hover:not(:disabled),
-	.more:hover {
-		border-color: var(--series-1);
-		color: var(--text-primary);
-	}
-
-	.entry button:disabled {
-		opacity: 0.45;
-		cursor: default;
-	}
-
-	/* Cancel is the way back, not a second thing to press. */
-	.entry button.plain,
-	.entry button.plain:hover {
-		border-color: transparent;
-		background: transparent;
-		color: var(--text-muted);
-	}
-
-	.more {
-		margin-top: 12px;
-	}
-
-	.applied {
-		margin-top: 20px;
-		padding-top: 16px;
-		border-top: 1px solid var(--border);
-	}
-
-	.applied h3 {
-		margin: 0 0 2px;
-		font-size: 13px;
-		font-weight: 600;
-	}
-
-	.applied li {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		padding: 6px 0;
-	}
-
-	.applied .merchant {
-		flex: 1;
-		min-width: 0;
-	}
-
-	.applied .meta {
-		flex: none;
-		text-align: right;
-	}
-
-	.remove {
-		flex: none;
-		width: 26px;
-		height: 26px;
-		padding: 0;
-		border: 1px solid transparent;
-		border-radius: var(--radius-md);
-		background: transparent;
-		font-size: 12px;
-		color: var(--text-muted);
-		cursor: pointer;
-	}
-
-	.remove:hover {
-		border-color: var(--status-critical);
-		color: var(--text-primary);
-	}
-
-	@media (max-width: 560px) {
-		.choose,
-		select {
-			width: 100%;
-			max-width: none;
-		}
-
-		.applied .meta {
-			display: none;
-		}
-	}
-</style>

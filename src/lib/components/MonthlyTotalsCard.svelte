@@ -1,8 +1,12 @@
 <script lang="ts">
+	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
+	import { ToggleGroup, ToggleGroupItem } from '$lib/components/ui/toggle-group/index.js';
 	import ChartCard from './ChartCard.svelte';
 	import MonthlyTotalsChart from './MonthlyTotalsChart.svelte';
 	import MonthlyTotalsTable from './MonthlyTotalsTable.svelte';
 	import { formatCount, formatMonth } from '../format.ts';
+	import { CALENDAR_START } from '../stats/cycle.ts';
 	import { buildMonthlyTotals, typicalMonth } from '../stats/monthly.ts';
 	import type { MonthMetric, Transaction } from '../types.ts';
 
@@ -14,9 +18,11 @@
 		transactions: readonly Transaction[];
 		/** The month the rest of the page is looking at, drawn in full strength. */
 		focusMonth: string;
+		/** Day of the month the reader's months open on. */
+		monthStart?: number;
 	}
 
-	const { transactions, focusMonth }: Props = $props();
+	const { transactions, focusMonth, monthStart = CALENDAR_START }: Props = $props();
 
 	const METRICS: readonly { id: MonthMetric; label: string }[] = [
 		{ id: 'net', label: 'Net' },
@@ -32,7 +38,7 @@
 	let picked = $state<readonly string[]>([]);
 	let showTypical = $state(true);
 
-	const all = $derived(buildMonthlyTotals(transactions, metric));
+	const all = $derived(buildMonthlyTotals(transactions, metric, monthStart));
 	const available = $derived(all.map((month) => month.month));
 
 	const shown = $derived(
@@ -56,172 +62,106 @@
 	);
 
 	function isLastN(count: number): boolean {
-		return picked.length === count && available.slice(-count).every(isPicked);
+		return (
+			picked.length === count && available.slice(-count).every((month) => picked.includes(month))
+		);
 	}
 
-	function isPicked(month: string): boolean {
-		return picked.length === 0 || picked.includes(month);
-	}
+	/** Blank while the selection is one the shortcuts do not describe. */
+	const countChoice = $derived.by(() => {
+		if (picked.length === 0) return 'all';
+		return counts.find(isLastN)?.toString() ?? '';
+	});
 
-	function toggle(month: string): void {
-		const current = picked.length === 0 ? available : picked;
-		const next = current.includes(month)
-			? current.filter((other) => other !== month)
-			: [...current, month];
-
-		// One month has to stay on screen — an empty chart is never the ask.
-		if (next.length === 0) return;
-		picked = next.length === available.length ? [] : next;
-	}
+	/** Every month is selected unless a subset was picked. */
+	const selectedMonths = $derived(picked.length === 0 ? [...available] : [...picked]);
 </script>
 
 <ChartCard title="Month against month" {subtitle}>
 	{#snippet toolbar()}
-		<div class="group">
-			<span id="metric-label">Plot</span>
-			<div class="segmented" role="group" aria-labelledby="metric-label">
+		<div class="flex min-w-0 flex-col gap-1.5">
+			<span id="metric-label" class="text-xs text-muted-foreground">Plot</span>
+			<ToggleGroup
+				type="single"
+				variant="outline"
+				size="sm"
+				aria-labelledby="metric-label"
+				value={metric}
+				onValueChange={(next) => {
+					// Something is always plotted, so the group cannot be emptied.
+					if (next) metric = next as MonthMetric;
+				}}
+			>
 				{#each METRICS as option (option.id)}
-					<button
-						type="button"
-						class:selected={metric === option.id}
-						aria-pressed={metric === option.id}
-						onclick={() => (metric = option.id)}>{option.label}</button
-					>
+					<ToggleGroupItem value={option.id} class="text-[13px]">{option.label}</ToggleGroupItem>
 				{/each}
-			</div>
+			</ToggleGroup>
 		</div>
 
 		{#if available.length > 1}
-			<div class="group">
-				<span id="count-label">Months</span>
-				<div class="segmented" role="group" aria-labelledby="count-label">
+			<div class="flex min-w-0 flex-col gap-1.5">
+				<span id="count-label" class="text-xs text-muted-foreground">Months</span>
+				<ToggleGroup
+					type="single"
+					variant="outline"
+					size="sm"
+					aria-labelledby="count-label"
+					value={countChoice}
+					onValueChange={(next) => {
+						if (!next) return;
+						picked = next === 'all' ? [] : available.slice(-Number(next));
+					}}
+				>
 					{#each counts as count (count)}
-						<button
-							type="button"
-							class:selected={isLastN(count)}
-							aria-pressed={isLastN(count)}
-							onclick={() => (picked = available.slice(-count))}>Last {count}</button
-						>
+						<ToggleGroupItem value={count.toString()} class="text-[13px]">
+							Last {count}
+						</ToggleGroupItem>
 					{/each}
-					<button
-						type="button"
-						class:selected={picked.length === 0}
-						aria-pressed={picked.length === 0}
-						onclick={() => (picked = [])}>All</button
-					>
-				</div>
+					<ToggleGroupItem value="all" class="text-[13px]">All</ToggleGroupItem>
+				</ToggleGroup>
 			</div>
 		{/if}
 
 		{#if shown.length > 1}
-			<label class="toggle">
-				<input type="checkbox" bind:checked={showTypical} />
-				<span>Typical month</span>
-			</label>
+			<div class="flex items-center gap-1.75 pb-1.5">
+				<Checkbox id="typical-month" bind:checked={showTypical} />
+				<Label for="typical-month" class="text-[13px] font-normal text-muted-foreground">
+					Typical month
+				</Label>
+			</div>
 		{/if}
 
 		{#if available.length > 1}
 			<!-- Chips rather than a popover: same idiom as the period row, and every
-			     month stays visible instead of hiding behind a disclosure. -->
-			<div class="chips" role="group" aria-label="Months to compare">
+			     month stays visible instead of hiding behind a disclosure.
+
+			     Selected is the resting state here — most months are on — so the mark
+			     is a quiet fill rather than a badge, and dropping one is the visible act. -->
+			<ToggleGroup
+				type="multiple"
+				variant="outline"
+				size="sm"
+				spacing={1.5}
+				class="basis-full flex-wrap"
+				aria-label="Months to compare"
+				value={selectedMonths}
+				onValueChange={(next) => {
+					// One month has to stay on screen — an empty chart is never the ask.
+					if (next.length === 0) return;
+					picked = next.length === available.length ? [] : next;
+				}}
+			>
 				{#each [...available].reverse() as month (month)}
-					<button
-						type="button"
-						class:selected={isPicked(month)}
-						aria-pressed={isPicked(month)}
-						onclick={() => toggle(month)}>{formatMonth(month)}</button
-					>
+					<ToggleGroupItem value={month} class="text-xs">{formatMonth(month)}</ToggleGroupItem>
 				{/each}
-			</div>
+			</ToggleGroup>
 		{/if}
 	{/snippet}
 
 	{#snippet chart()}
-		<MonthlyTotalsChart months={shown} focusMonth={focus} {metric} {typical} />
+		<MonthlyTotalsChart months={shown} focusMonth={focus} {metric} {typical} {monthStart} />
 	{/snippet}
 	{#snippet table()}
 		<MonthlyTotalsTable months={shown} {typical} {metric} />
 	{/snippet}
 </ChartCard>
-
-<style>
-	.group {
-		display: flex;
-		flex-direction: column;
-		gap: 5px;
-		min-width: 0;
-	}
-
-	.group > span {
-		font-size: 12px;
-		color: var(--text-secondary);
-	}
-
-	.segmented {
-		display: inline-flex;
-		flex-wrap: wrap;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		overflow: hidden;
-		background: var(--surface-1);
-	}
-
-	.segmented button {
-		border: 0;
-		background: transparent;
-		padding: 5px 11px;
-		font-size: 13px;
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-
-	.segmented button + button {
-		border-left: 1px solid var(--border);
-	}
-
-	.segmented button:hover:not(.selected),
-	.chips button:hover:not(.selected) {
-		background: var(--surface-2);
-	}
-
-	.segmented button.selected {
-		background: var(--surface-2);
-		color: var(--text-primary);
-		font-weight: 600;
-	}
-
-	.toggle {
-		display: flex;
-		align-items: center;
-		gap: 7px;
-		padding-bottom: 5px;
-		font-size: 13px;
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-
-	.chips {
-		flex-basis: 100%;
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-	}
-
-	.chips button {
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: transparent;
-		padding: 3px 9px;
-		font-size: 12px;
-		color: var(--text-muted);
-		cursor: pointer;
-	}
-
-	/* Selected is the resting state here — most months are on — so the mark is a
-	   quiet fill rather than a badge, and dropping one is the visible act. */
-	.chips button.selected {
-		border-color: var(--border-strong);
-		background: var(--surface-2);
-		color: var(--text-primary);
-	}
-</style>

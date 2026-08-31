@@ -17,11 +17,12 @@ export const MAX_FINDINGS = 5;
 export const MAX_ACTIONS = 4;
 
 /**
- * How much of the reader's note is sent.
+ * How much of the reader's own writing is sent, per message.
  *
  * A sentence or two is the point — a goal, a question, something the statement
  * cannot show. The cap is here rather than only on the textarea so that what
- * gets sent is decided in the same file as everything else that gets sent.
+ * gets sent is decided in the same file as everything else that gets sent, and
+ * it holds for a follow-up as much as for the opening note.
  */
 export const MAX_NOTE_LENGTH = 500;
 
@@ -33,11 +34,14 @@ Rules:
 - Use only the figures you were given. Never invent a transaction, a total, a merchant or a trend, and never estimate a figure that is not derivable from what is in front of you.
 - Quote real numbers. "R2 400 on takeaways, 18% of the month" beats "you spend a lot on takeaways".
 - Compare months only when more than one month is present, and say so when a month is partial.
+- A \`monthStartDay\` field means the reader's months do not open on the 1st: each \`months\` entry runs from that day of the previous month. Name months as the figures do, and do not recut them.
 - Recurring charges are commitments: a large monthly total that the reader may have forgotten is worth more than a one-off purchase they clearly remember.
 - Be direct and specific, never moralising. This is someone's own money and they can read the totals themselves — earn the reading by pointing at what they would have missed.
 - If the period is too short or too sparse to support a finding, say that instead of stretching one.
 
 The reader may add a note saying what they want from the read: a question, a goal, or something the statement cannot show — a move, a new job, a month they already know was unusual. Let it steer what you look at and how you frame it, and if it asks a question, make the headline the answer to it. It never relaxes the rules above: if the note asks for something these figures cannot answer, say so plainly instead of inventing a figure.
+
+The reader can keep asking after your first report. A follow-up is about the same figures: you are given no new ones, so answer it from what you were shown at the start and do not assume what is on their screen still matches. Do not repeat a report they already have: a follow-up asks you to go further into something, or to look at it another way, so make the headline the answer to what they asked and the findings the working behind it. If it asks for a figure these aggregates do not contain — one merchant's individual transactions, a date you were not given — say so plainly rather than deriving it from something close.
 
 Tone on a finding means: "good" — worth knowing and in their favour; "warning" — worth acting on; "neutral" — worth knowing, neither of the two.`;
 
@@ -63,6 +67,17 @@ export function buildUserPrompt(payload: AiPayload, note = ''): string {
 ${JSON.stringify(payload, null, 2)}
 
 Read it and report what stands out.${aside === '' ? '' : `\n\nWhat I want from this read:\n${aside}`}`;
+}
+
+/**
+ * A follow-up question, as it goes out.
+ *
+ * Trimmed and capped exactly as a note is, and by the same constant: a
+ * follow-up is the reader's own words leaving the browser, so it is decided
+ * here rather than at the textarea that bounds it on screen.
+ */
+export function buildFollowUp(question: string): string {
+	return question.trim().slice(0, MAX_NOTE_LENGTH);
 }
 
 /**

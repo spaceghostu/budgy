@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { Badge } from '$lib/components/ui/badge/index.js';
+	import { Button } from '$lib/components/ui/button/index.js';
 	import { formatCount, formatCurrency, formatDate, formatMonth } from '../format.ts';
 	import type { RecurringCharge } from '../types.ts';
 
@@ -26,24 +28,34 @@
 </script>
 
 {#if charges.length === 0}
-	<p class="empty">
+	<p class="py-6 text-center text-[13px] text-faint">
 		No repeating charges found in this period. A longer statement gives this more to work with.
 	</p>
 {:else}
-	<p class="total">
-		<strong>{formatCurrency(total)}</strong> a month across
+	<p class="mb-3.5 text-[13px] text-muted-foreground">
+		<strong class="text-[15px] text-foreground">{formatCurrency(total)}</strong> a month across
 		{formatCount(charges.length, 'repeating charge')}
 	</p>
 
-	<ul>
+	<ul class="flex list-none flex-col p-0">
 		{#each visible as charge (charge.merchant)}
-			<li>
-				<div class="row">
-					<span class="name" title={charge.merchant}>{charge.merchant}</span>
-					<span class="amount">{formatCurrency(charge.latestAmount)}</span>
+			<li class="min-w-0 border-t py-2.5">
+				<div class="flex items-baseline justify-between gap-3">
+					<span class="min-w-0 truncate text-[13px]" title={charge.merchant}>{charge.merchant}</span
+					>
+					<span class="flex-none text-[13px] font-semibold tabular-nums">
+						{formatCurrency(charge.latestAmount)}
+					</span>
 				</div>
-				<p class="meta">
-					{#if charge.isDebitOrder}<span class="tag">Debit order</span>{/if}
+				<p class="mt-1 text-xs text-faint">
+					{#if charge.isDebitOrder}
+						<Badge
+							variant="outline"
+							class="mr-1.5 rounded-full border-input px-1.5 py-px text-[11px] font-normal text-muted-foreground"
+						>
+							Debit order
+						</Badge>
+					{/if}
 					{charge.category} · last on {formatDate(charge.lastSeen)}
 					{#if charge.count > 1}
 						· {formatCount(charge.count, 'charge')}
@@ -61,95 +73,13 @@
 	</ul>
 
 	{#if charges.length > limit}
-		<button type="button" onclick={() => (expanded = !expanded)}>
+		<Button
+			variant="outline"
+			size="xs"
+			class="mt-3 border-input hover:border-series"
+			onclick={() => (expanded = !expanded)}
+		>
 			{expanded ? 'Show fewer' : `Show all ${charges.length}`}
-		</button>
+		</Button>
 	{/if}
 {/if}
-
-<style>
-	.total {
-		margin: 0 0 14px;
-		font-size: 13px;
-		color: var(--text-secondary);
-	}
-
-	.total strong {
-		color: var(--text-primary);
-		font-size: 15px;
-	}
-
-	ul {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-	}
-
-	li {
-		padding: 10px 0;
-		border-top: 1px solid var(--border);
-		min-width: 0;
-	}
-
-	.row {
-		display: flex;
-		justify-content: space-between;
-		align-items: baseline;
-		gap: 12px;
-	}
-
-	.name {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		font-size: 13px;
-	}
-
-	.amount {
-		flex: none;
-		font-size: 13px;
-		font-weight: 600;
-		font-variant-numeric: tabular-nums;
-	}
-
-	.meta {
-		margin: 4px 0 0;
-		font-size: 12px;
-		color: var(--text-muted);
-	}
-
-	.tag {
-		display: inline-block;
-		margin-right: 6px;
-		padding: 1px 6px;
-		border: 1px solid var(--border-strong);
-		border-radius: 999px;
-		font-size: 11px;
-		color: var(--text-secondary);
-	}
-
-	.empty {
-		margin: 0;
-		padding: 24px 0;
-		text-align: center;
-		color: var(--text-muted);
-		font-size: 13px;
-	}
-
-	button {
-		margin-top: 12px;
-		padding: 6px 12px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--surface-1);
-		font-size: 12px;
-		cursor: pointer;
-	}
-
-	button:hover {
-		border-color: var(--series-1);
-	}
-</style>

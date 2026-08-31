@@ -120,6 +120,15 @@ export function formatMonth(month: string): string {
 	return parsed.toLocaleDateString('en-ZA', { month: 'short', year: 'numeric' });
 }
 
+/** `25` becomes `25th` — for naming the day a month opens on. */
+export function formatOrdinal(day: number): string {
+	// 11th to 13th are the exceptions the last digit alone gets wrong.
+	const teens = day % 100 >= 11 && day % 100 <= 13;
+	const suffix = teens ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[day % 10] ?? 'th');
+
+	return `${day}${suffix}`;
+}
+
 export function formatCount(value: number, singular: string, plural = `${singular}s`): string {
 	return `${value} ${value === 1 ? singular : plural}`;
 }

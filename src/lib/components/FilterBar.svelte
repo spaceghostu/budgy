@@ -1,207 +1,168 @@
 <script lang="ts">
-	import { formatMonth } from '../format.ts';
-	import { RANGE_OPTIONS, ALL_ACCOUNTS, type StatementState } from '../state/statement.svelte.ts';
+	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { ButtonGroup } from '$lib/components/ui/button-group/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
+	import { ToggleGroup, ToggleGroupItem } from '$lib/components/ui/toggle-group/index.js';
+	import { formatDate, formatMonth } from '../format.ts';
+	import { CALENDAR_START, cycleClosing, cycleOpening } from '../stats/cycle.ts';
+	import {
+		RANGE_OPTIONS,
+		ALL_ACCOUNTS,
+		type RangePreset,
+		type StatementState
+	} from '../state/statement.svelte.ts';
 
 	interface Props {
 		state: StatementState;
+		/**
+		 * How much of the row applies to the page under it.
+		 *
+		 * `account` is for a page that answers about the whole statement rather
+		 * than a slice of it, but still about one account — a forecast is learned
+		 * from the months either side of the one it is about, so a period would
+		 * scope away the very history it reads. Offering a control that changes
+		 * nothing is worse than not offering it.
+		 */
+		scope?: 'full' | 'account';
 	}
 
-	const { state }: Props = $props();
+	const { state, scope = 'full' }: Props = $props();
 
 	const showAccounts = $derived(state.accounts.length > 1);
+	const showPeriod = $derived(scope === 'full');
 
 	const monthIndex = $derived(state.months.indexOf(state.activeMonth));
 	const atOldest = $derived(monthIndex <= 0);
 	const atNewest = $derived(monthIndex < 0 || monthIndex === state.months.length - 1);
+
+	const accountLabel = $derived(state.account === ALL_ACCOUNTS ? 'All accounts' : state.account);
+
+	/**
+	 * Which days "Aug 2026" actually covers, spelled out.
+	 *
+	 * Only while the months are not the calendar's: there the name says it, and a
+	 * second line repeating "1 Aug – 31 Aug" would be noise.
+	 */
+	const span = $derived.by(() => {
+		if (state.monthStart === CALENDAR_START || state.activeMonth === '') return '';
+
+		const from = cycleOpening(state.activeMonth, state.monthStart);
+		const to = cycleClosing(state.activeMonth, state.monthStart);
+
+		return `${formatDate(from)} – ${formatDate(to)}`;
+	});
 </script>
 
 <!-- One row, above everything it scopes: every figure below re-renders together. -->
-<div class="filters">
+<div class="flex flex-wrap items-end gap-4">
 	{#if showAccounts}
-		<label class="field">
-			<span>Account</span>
-			<select bind:value={state.account}>
-				{#each state.accounts as account (account)}
-					<option value={account}>{account}</option>
-				{/each}
-				<option value={ALL_ACCOUNTS}>All accounts</option>
-			</select>
-		</label>
-	{/if}
-
-	<div class="field">
-		<span id="range-label">Period</span>
-		<div class="presets" role="group" aria-labelledby="range-label">
-			{#each RANGE_OPTIONS as option (option.id)}
-				<button
-					type="button"
-					class:selected={state.range === option.id}
-					aria-pressed={state.range === option.id}
-					onclick={() => (state.range = option.id)}
-				>
-					{#if state.range === option.id}<span class="check" aria-hidden="true">✓</span>{/if}
-					{option.label}
-				</button>
-			{/each}
-		</div>
-	</div>
-
-	{#if state.range === 'month'}
-		<div class="field">
-			<span id="month-label">Showing</span>
-			<!-- Arrows for the common step, the select for a jump across the year. -->
-			<div class="stepper" role="group" aria-labelledby="month-label">
-				<button
-					type="button"
-					aria-label="Previous month"
-					disabled={atOldest}
-					onclick={() => state.stepMonth(-1)}>‹</button
-				>
-				<!-- Reads from the resolved month, not the raw selection, which starts
-				     blank and stands for "whichever month is newest". -->
-				<select
-					value={state.activeMonth}
-					aria-label="Month"
-					onchange={(event) => (state.selectedMonth = event.currentTarget.value)}
-				>
-					{#each [...state.months].reverse() as month (month)}
-						<option value={month}>{formatMonth(month)}</option>
+		<div class="flex min-w-0 flex-col gap-1.5">
+			<Label for="account" class="text-xs text-muted-foreground">Account</Label>
+			<Select.Root type="single" bind:value={state.account}>
+				<Select.Trigger id="account" class="text-[13px]">{accountLabel}</Select.Trigger>
+				<Select.Content>
+					{#each state.accounts as account (account)}
+						<Select.Item value={account} label={account}>{account}</Select.Item>
 					{/each}
-				</select>
-				<button
-					type="button"
-					aria-label="Next month"
-					disabled={atNewest}
-					onclick={() => state.stepMonth(1)}>›</button
-				>
-			</div>
+					<Select.Item value={ALL_ACCOUNTS} label="All accounts">All accounts</Select.Item>
+				</Select.Content>
+			</Select.Root>
 		</div>
 	{/if}
 
-	{#if state.range === 'custom'}
-		<label class="field">
-			<span>From</span>
-			<input
-				type="date"
-				bind:value={state.customFrom}
-				min={state.earliestDate}
-				max={state.latestDate}
-			/>
-		</label>
-		<label class="field">
-			<span>To</span>
-			<input
-				type="date"
-				bind:value={state.customTo}
-				min={state.earliestDate}
-				max={state.latestDate}
-			/>
-		</label>
+	{#if showPeriod}
+		<div class="flex min-w-0 flex-col gap-1.5">
+			<span id="range-label" class="text-xs text-muted-foreground">Period</span>
+			<ToggleGroup
+				type="single"
+				variant="outline"
+				aria-labelledby="range-label"
+				value={state.range}
+				onValueChange={(next) => {
+					// Some period is always in force, so the group cannot be emptied.
+					if (next) state.range = next as RangePreset;
+				}}
+			>
+				{#each RANGE_OPTIONS as option (option.id)}
+					<ToggleGroupItem value={option.id} class="text-[13px]">{option.label}</ToggleGroupItem>
+				{/each}
+			</ToggleGroup>
+		</div>
+
+		{#if state.range === 'month'}
+			<div class="flex min-w-0 flex-col gap-1.5">
+				<span id="month-label" class="text-xs text-muted-foreground">
+					Showing{#if span !== ''}<span class="text-faint"> · {span}</span>{/if}
+				</span>
+				<!-- Arrows for the common step, the select for a jump across the year. -->
+				<ButtonGroup aria-labelledby="month-label">
+					<Button
+						variant="outline"
+						size="icon"
+						aria-label="Previous month"
+						disabled={atOldest}
+						onclick={() => state.stepMonth(-1)}
+					>
+						<ChevronLeftIcon aria-hidden="true" />
+					</Button>
+					<!-- Reads from the resolved month, not the raw selection, which starts
+					     blank and stands for "whichever month is newest". -->
+					<Select.Root
+						type="single"
+						value={state.activeMonth}
+						onValueChange={(month) => (state.selectedMonth = month)}
+					>
+						<Select.Trigger aria-label="Month" class="min-w-29.5 text-[13px]">
+							{formatMonth(state.activeMonth)}
+						</Select.Trigger>
+						<Select.Content>
+							{#each [...state.months].reverse() as month (month)}
+								<Select.Item value={month} label={formatMonth(month)}>
+									{formatMonth(month)}
+								</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					<Button
+						variant="outline"
+						size="icon"
+						aria-label="Next month"
+						disabled={atNewest}
+						onclick={() => state.stepMonth(1)}
+					>
+						<ChevronRightIcon aria-hidden="true" />
+					</Button>
+				</ButtonGroup>
+			</div>
+		{/if}
+
+		{#if state.range === 'custom'}
+			<div class="flex min-w-0 flex-col gap-1.5">
+				<Label for="from" class="text-xs text-muted-foreground">From</Label>
+				<Input
+					id="from"
+					type="date"
+					class="w-fit text-[13px]"
+					bind:value={state.customFrom}
+					min={state.earliestDate}
+					max={state.latestDate}
+				/>
+			</div>
+			<div class="flex min-w-0 flex-col gap-1.5">
+				<Label for="to" class="text-xs text-muted-foreground">To</Label>
+				<Input
+					id="to"
+					type="date"
+					class="w-fit text-[13px]"
+					bind:value={state.customTo}
+					min={state.earliestDate}
+					max={state.latestDate}
+				/>
+			</div>
+		{/if}
 	{/if}
 </div>
-
-<style>
-	.filters {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: flex-end;
-		gap: 16px;
-	}
-
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 5px;
-		min-width: 0;
-	}
-
-	.field > span {
-		font-size: 12px;
-		color: var(--text-secondary);
-	}
-
-	select,
-	input[type='date'] {
-		padding: 6px 10px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--surface-1);
-		font-size: 13px;
-	}
-
-	.stepper {
-		display: inline-flex;
-		align-items: stretch;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		overflow: hidden;
-		background: var(--surface-1);
-	}
-
-	.stepper select {
-		border: 0;
-		border-radius: 0;
-		min-width: 118px;
-	}
-
-	.stepper button {
-		border: 0;
-		background: transparent;
-		padding: 0 11px;
-		font-size: 15px;
-		line-height: 1;
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-
-	.stepper button:hover:not(:disabled) {
-		background: var(--surface-2);
-	}
-
-	.stepper button:disabled {
-		color: var(--text-muted);
-		opacity: 0.45;
-		cursor: default;
-	}
-
-	.presets {
-		display: inline-flex;
-		flex-wrap: wrap;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		overflow: hidden;
-		background: var(--surface-1);
-	}
-
-	.presets button {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		border: 0;
-		background: transparent;
-		padding: 6px 11px;
-		font-size: 13px;
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-
-	.presets button + button {
-		border-left: 1px solid var(--border);
-	}
-
-	/* Hover stays a ghost wash so it never competes with the selection mark. */
-	.presets button:hover:not(.selected) {
-		background: var(--surface-2);
-	}
-
-	.presets button.selected {
-		background: var(--surface-2);
-		color: var(--text-primary);
-		font-weight: 600;
-	}
-
-	.check {
-		font-size: 11px;
-		font-weight: 700;
-	}
-</style>

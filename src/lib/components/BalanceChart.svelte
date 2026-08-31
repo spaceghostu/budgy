@@ -270,12 +270,12 @@
 	.end-dot,
 	.cursor-dot {
 		fill: var(--series-1);
-		stroke: var(--surface-1);
+		stroke: var(--card);
 		stroke-width: 2;
 	}
 
 	.end-label {
-		fill: var(--text-primary);
+		fill: var(--foreground);
 		font-size: 12px;
 		font-weight: 600;
 	}
@@ -286,7 +286,7 @@
 	}
 
 	.tick {
-		fill: var(--text-muted);
+		fill: var(--faint);
 		font-size: 11px;
 		font-variant-numeric: tabular-nums;
 	}
@@ -306,8 +306,8 @@
 		transform: translateX(-50%);
 		min-width: 180px;
 		max-width: 240px;
-		background: var(--surface-1);
-		border: 1px solid var(--border-strong);
+		background: var(--card);
+		border: 1px solid var(--input);
 		border-radius: var(--radius-md);
 		box-shadow: 0 4px 16px rgba(11, 11, 11, 0.12);
 		padding: 10px 12px;
@@ -326,7 +326,7 @@
 
 	.tooltip-meta {
 		font-size: 12px;
-		color: var(--text-secondary);
+		color: var(--muted-foreground);
 	}
 
 	.tooltip-row {
@@ -337,7 +337,7 @@
 		padding-top: 6px;
 		border-top: 1px solid var(--border);
 		font-size: 12px;
-		color: var(--text-secondary);
+		color: var(--muted-foreground);
 	}
 
 	.key {
@@ -358,19 +358,19 @@
 	.amount {
 		flex: none;
 		font-variant-numeric: tabular-nums;
-		color: var(--text-primary);
+		color: var(--foreground);
 	}
 
 	figcaption {
 		margin-top: 10px;
 		font-size: 12px;
-		color: var(--text-muted);
+		color: var(--faint);
 	}
 
 	.empty {
 		margin: 0;
 		padding: 48px 0;
 		text-align: center;
-		color: var(--text-muted);
+		color: var(--faint);
 	}
 </style>

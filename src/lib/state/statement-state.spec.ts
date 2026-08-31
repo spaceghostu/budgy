@@ -1,3 +1,4 @@
+import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PdfAccount, PdfStatement } from '../parse/pdf-rows.ts';
 
@@ -91,6 +92,8 @@ function fakeStorage(): Storage {
 
 beforeEach(() => {
 	vi.stubGlobal('localStorage', fakeStorage());
+	// A fresh factory per test, so one test's history cannot be another's.
+	vi.stubGlobal('indexedDB', new IDBFactory());
 	readPdfStatement.mockReset();
 	readPdfStatement.mockResolvedValue(pdfStatement(CHEQUE));
 });
@@ -203,12 +206,45 @@ describe('StatementState', () => {
 		expect(state.insights.summary.closingBalance).toBe(0);
 	});
 
+	it('adds every account up into a net worth, whichever one is selected', async () => {
+		const savings = account('Savings Account', '99999999999', [
+			['2026-06-01', 'INTEREST', 50, 5000]
+		]);
+		readPdfStatement.mockResolvedValue(pdfStatement(CHEQUE, savings));
+
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		expect(state.netWorth.isRelative).toBe(false);
+		// The cheque account ends at nothing, the savings account at 5,000.
+		expect(state.netWorth.total).toBe(5000);
+		expect(state.netWorth.accounts.map((entry) => entry.account)).toHaveLength(2);
+	});
+
+	it('leaves a stale anchor out of the net worth', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		// A balance measured after some earlier export, not this one.
+		state.anchors = { 'Cheque account': { balance: 2500, asOf: '2020-01-01' } };
+
+		expect(state.netWorth.isRelative).toBe(true);
+		expect(state.netWorth.unanchored).toEqual(['Cheque account']);
+	});
+
+	it('does not treat the all-accounts balance as an account of its own', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		state.anchors = { [ALL_ACCOUNTS]: { balance: 2500, asOf: state.latestDate } };
+
+		expect(state.netWorth.isRelative).toBe(true);
+	});
+
 	it('removes one source and keeps the other', async () => {
 		const state = new StatementState();
 		await state.loadFile(pdfFile());
 		await state.loadFile(csvFile());
 
-		state.remove('pdf');
+		await state.remove('pdf');
 
 		expect(state.hasPdf).toBe(false);
 		expect(state.hasCsv).toBe(true);
@@ -361,6 +397,29 @@ describe('StatementState', () => {
 		expect(state.visible).toHaveLength(1);
 	});
 
+	it('re-cuts the months when the reader moves the day they start on', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		state.range = 'month';
+
+		state.setMonthStart(25);
+
+		// 25 July to 24 August is "August", and holds both of August's rows.
+		expect(state.months).toEqual(['2026-05', '2026-07', '2026-08']);
+		expect(state.activeMonth).toBe('2026-08');
+		expect(state.bounds).toEqual({ from: '2026-07-25', to: '2026-08-24' });
+		expect(state.visible).toHaveLength(2);
+	});
+
+	it('keeps the chosen day for the next visit, and refuses one no month has', async () => {
+		const state = new StatementState();
+		state.setMonthStart(25);
+		expect(localStorage.getItem('budgy:month-start')).toBe('25');
+
+		state.setMonthStart(31);
+		expect(state.monthStart).toBe(1);
+	});
+
 	it('keeps every month available while the view is scoped to one', async () => {
 		// What the month-against-month card is fed, so it can still compare.
 		const state = new StatementState();
@@ -372,20 +431,60 @@ describe('StatementState', () => {
 		expect(state.months).toEqual(['2026-05', '2026-07', '2026-08']);
 		expect(state.focusMonth).toBe('2026-08');
 	});
+});
 
-	it('does not keep the files on the device unless asked', async () => {
+describe('the history', () => {
+	it('keeps an upload without being asked', async () => {
 		const state = new StatementState();
 		await state.loadFile(csvFile());
 
-		expect(localStorage.getItem('budgy:files')).toBeNull();
-
-		state.setRemember(true);
-		expect(localStorage.getItem('budgy:files')).not.toBeNull();
+		expect(state.library.entries).toHaveLength(1);
+		expect(state.library.entries[0]?.csvName).toBe('export.csv');
 	});
 
-	it('restores remembered files', async () => {
+	it('files both files of one statement as a single entry', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		await state.loadFile(pdfFile());
+
+		expect(state.library.entries).toHaveLength(1);
+		expect(state.library.entries[0]?.csvName).toBe('export.csv');
+		expect(state.library.entries[0]?.pdfName).toBe('statement.pdf');
+	});
+
+	it('files the next statement beside the last rather than over it', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		state.startNew();
+		await state.loadFile(csvFile(PARTIAL_CSV, 'july.csv'));
+
+		expect(state.library.entries.map((entry) => entry.csvName)).toEqual(['july.csv', 'export.csv']);
+	});
+
+	it('clears the screen for a new statement without deleting the old one', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		state.startNew();
+
+		expect(state.hasStatement).toBe(false);
+		expect(state.csvName).toBe('');
+		expect(state.library.count).toBe(1);
+	});
+
+	it('records what each saved statement covers, so the list can say', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+
+		expect(state.library.entries[0]?.summary).toEqual({
+			from: '2026-05-01',
+			to: '2026-08-09',
+			accounts: ['Cheque account'],
+			transactionCount: 4
+		});
+	});
+
+	it('re-opens the statement this browser was last reading', async () => {
 		const first = new StatementState();
-		first.setRemember(true);
 		await first.loadFile(csvFile());
 		await first.loadFile(pdfFile());
 
@@ -395,33 +494,171 @@ describe('StatementState', () => {
 		expect(second.hasCsv).toBe(true);
 		expect(second.hasPdf).toBe(true);
 		expect(second.csvName).toBe('export.csv');
-		expect(second.remember).toBe(true);
 	});
 
-	it('restores nothing when nothing was remembered', async () => {
+	it('restores nothing when nothing was kept', async () => {
 		const state = new StatementState();
 		await state.restore();
 
 		expect(state.hasStatement).toBe(false);
+		expect(state.library.count).toBe(0);
 	});
 
-	it('forgets the files when the user opts back out', async () => {
-		const state = new StatementState();
-		state.setRemember(true);
-		await state.loadFile(csvFile());
-		state.setRemember(false);
+	it('comes back to the upload page after a new statement was started', async () => {
+		const first = new StatementState();
+		await first.loadFile(csvFile());
+		first.startNew();
 
-		expect(localStorage.getItem('budgy:files')).toBeNull();
+		const second = new StatementState();
+		await second.restore();
+
+		expect(second.hasStatement).toBe(false);
+		expect(second.library.count).toBe(1);
 	});
 
-	it('clears everything on request', async () => {
+	it('opens a saved statement in place of the one on screen', async () => {
 		const state = new StatementState();
-		state.setRemember(true);
 		await state.loadFile(csvFile());
-		state.clear();
+		const first = state.library.entries[0]?.id ?? '';
+
+		state.startNew();
+		await state.loadFile(csvFile(PARTIAL_CSV, 'july.csv'));
+		expect(state.csvName).toBe('july.csv');
+
+		await state.openEntry(first);
+
+		expect(state.csvName).toBe('export.csv');
+		expect(state.library.activeId).toBe(first);
+		expect(state.library.count).toBe(2);
+	});
+
+	it('does not file the statement again just for being opened', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		const id = state.library.entries[0]?.id ?? '';
+
+		await state.openEntry(id);
+
+		expect(state.library.count).toBe(1);
+	});
+
+	it('deletes one statement and closes it if it was the one open', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		const id = state.library.entries[0]?.id ?? '';
+
+		await state.deleteEntry(id);
+
+		expect(state.library.count).toBe(0);
+		expect(state.hasStatement).toBe(false);
+		expect(state.library.activeId).toBe('');
+	});
+
+	it('leaves the open statement alone when another is deleted', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		const old = state.library.entries[0]?.id ?? '';
+
+		state.startNew();
+		await state.loadFile(csvFile(PARTIAL_CSV, 'july.csv'));
+		await state.deleteEntry(old);
+
+		expect(state.library.count).toBe(1);
+		expect(state.csvName).toBe('july.csv');
+	});
+
+	it('drops the entry when its last file is removed', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		await state.remove('csv');
 
 		expect(state.hasStatement).toBe(false);
-		expect(state.csvName).toBe('');
+		expect(state.library.count).toBe(0);
+	});
+
+	it('keeps the entry when one of two files is removed', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		await state.loadFile(pdfFile());
+		await state.remove('csv');
+
+		expect(state.library.count).toBe(1);
+		expect(state.library.entries[0]?.csvName).toBe('');
+		expect(state.library.entries[0]?.pdfName).toBe('statement.pdf');
+	});
+
+	it('forgets every statement on request', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		state.startNew();
+		await state.loadFile(csvFile(PARTIAL_CSV, 'july.csv'));
+
+		await state.clearAll();
+
+		expect(state.library.count).toBe(0);
+		expect(state.hasStatement).toBe(false);
+	});
+
+	it('keeps nothing once the reader turns keeping off', async () => {
+		const state = new StatementState();
+		await state.setKeepUploads(false);
+		await state.loadFile(csvFile());
+
+		expect(state.library.count).toBe(0);
+		// Still readable in this tab — turning it off is about the disk, not the page.
+		expect(state.hasStatement).toBe(true);
+	});
+
+	it('does not claim to have kept a statement it was told not to keep', async () => {
+		const first = new StatementState();
+		await first.setKeepUploads(false);
+		await first.loadFile(csvFile());
+
+		expect(first.library.activeId).toBe('');
+
+		// Nothing was filed, so the next visit must not go looking for it.
+		const second = new StatementState();
+		await second.restore();
+
+		expect(second.library.error).toBeNull();
+		expect(second.hasStatement).toBe(false);
+	});
+
+	it('throws away what was already kept when keeping is turned off', async () => {
+		const state = new StatementState();
+		await state.loadFile(csvFile());
+		expect(state.library.count).toBe(1);
+
+		await state.setKeepUploads(false);
+
+		expect(state.library.count).toBe(0);
+	});
+
+	it('files what is on screen when keeping is turned back on', async () => {
+		const state = new StatementState();
+		await state.setKeepUploads(false);
+		await state.loadFile(csvFile());
+
+		await state.setKeepUploads(true);
+
+		expect(state.library.count).toBe(1);
+		expect(state.library.entries[0]?.csvName).toBe('export.csv');
+	});
+
+	it('remembers that keeping was turned off', async () => {
+		await new StatementState().setKeepUploads(false);
+
+		expect(new StatementState().library.keepUploads).toBe(false);
+	});
+
+	it('files the statement an older version kept, then forgets its key', async () => {
+		localStorage.setItem('budgy:files', JSON.stringify({ csv: { name: 'legacy.csv', text: CSV } }));
+
+		const state = new StatementState();
+		await state.restore();
+
+		expect(state.csvName).toBe('legacy.csv');
+		expect(state.library.count).toBe(1);
 		expect(localStorage.getItem('budgy:files')).toBeNull();
 	});
 });
@@ -497,13 +734,24 @@ describe('filing what the bank left unfiled', () => {
 		expect(state.uncategorised.map((group) => group.merchant)).toContain('GYM');
 	});
 
-	it('leaves the bank’s own filing alone', async () => {
+	it('refiles what the bank had already filed, when the reader says so', async () => {
+		// The reader has the last word: a breakdown that cannot be corrected is one
+		// they stop trusting. The choice is listed under `appliedRules`, and taking
+		// it back off is what puts the bank's own filing back.
 		const state = new StatementState();
 		await state.loadFile(csvFile());
 
-		state.setCategory('GROCER', 'Coffee');
+		const grocer = () => state.visible.find((transaction) => transaction.merchant === 'GROCER');
 
-		expect(state.visible.every((transaction) => transaction.category === 'Groceries')).toBe(true);
+		state.setCategory('GROCER', 'Coffee');
+		expect(grocer()?.category).toBe('Coffee');
+		// Only that merchant moves — a rule is keyed by one, not by the bank's label.
+		expect(
+			state.visible.filter((transaction) => transaction.category === 'Groceries')
+		).toHaveLength(3);
+
+		state.setCategory('GROCER', '');
+		expect(grocer()?.category).toBe('Groceries');
 	});
 
 	it('still applies to a PDF row the CSV had no match for', async () => {
@@ -590,8 +838,215 @@ describe('filing what the bank left unfiled', () => {
 		await state.loadFile(pdfFile());
 		state.setCategory('GYM', 'Sport and Fitness');
 
-		state.clear();
+		await state.clearAll();
 
 		expect(state.categoryRules).toEqual({ GYM: 'Sport and Fitness' });
+	});
+
+	it('keeps a name of the reader’s own after the rule that made it is dropped', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'School fees');
+		// Re-filed elsewhere, so nothing carries the invented name any more.
+		state.setCategory('GYM', 'Sport and Fitness');
+
+		expect(state.ownCategories).toContain('School fees');
+		expect(state.categoryOptions).toContain('School fees');
+	});
+
+	it('offers a name of the reader’s own to the next statement they open', async () => {
+		const first = new StatementState();
+		await first.loadFile(pdfFile());
+		first.setCategory('GYM', 'School fees');
+		first.setCategory('GYM', '');
+
+		const second = new StatementState();
+		await second.loadFile(pdfFile());
+
+		expect(second.categoryOptions).toContain('School fees');
+	});
+
+	it('does not claim the bank’s own categories as the reader’s', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'Sport and Fitness');
+
+		expect(state.ownCategories).toEqual([]);
+	});
+
+	it('puts the category just chosen at the head of the shortlist', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+
+		state.setCategory('GYM', 'Sport and Fitness');
+		state.setCategory('GROCER', 'Coffee');
+
+		expect(state.recentOptions).toEqual(['Coffee', 'Sport and Fitness']);
+	});
+
+	it('carries the shortlist into the next statement', async () => {
+		const first = new StatementState();
+		await first.loadFile(pdfFile());
+		first.setCategory('GYM', 'Sport and Fitness');
+
+		const second = new StatementState();
+		await second.loadFile(pdfFile());
+
+		expect(second.recentOptions).toEqual(['Sport and Fitness']);
+	});
+
+	it('leaves a shortlisted category out once nothing can be filed under it', async () => {
+		const state = new StatementState();
+		await state.loadFile(pdfFile());
+		// A category from a statement long since replaced, which this one has no
+		// way to resolve — offering it would be offering a dead end.
+		localStorage.setItem('budgy:recent-categories', JSON.stringify(['Ghost category']));
+
+		const next = new StatementState();
+		await next.loadFile(pdfFile());
+
+		expect(next.recentCategories).toEqual(['Ghost category']);
+		expect(next.recentOptions).toEqual([]);
+		expect(state.recentOptions).toEqual([]);
+	});
+});
+
+describe('charges the reader tells the forecast are not coming', () => {
+	it('counts everything the history names until told otherwise', () => {
+		expect(new StatementState().droppedCharges).toEqual([]);
+	});
+
+	it('stops counting one, and starts again when it is ticked back on', () => {
+		const state = new StatementState();
+
+		state.setChargeCounted('expense:GYM', false);
+		expect(state.droppedCharges).toEqual(['expense:GYM']);
+
+		state.setChargeCounted('expense:GYM', true);
+		expect(state.droppedCharges).toEqual([]);
+	});
+
+	it('says the same charge once, however often it is ticked off', () => {
+		const state = new StatementState();
+
+		state.setChargeCounted('expense:GYM', false);
+		state.setChargeCounted('expense:GYM', false);
+
+		expect(state.droppedCharges).toEqual(['expense:GYM']);
+	});
+
+	it('remembers the choice for the next visit', () => {
+		new StatementState().setChargeCounted('expense:GYM', false);
+
+		// The gym is cancelled today and still cancelled when next month's export
+		// arrives with a history that says it bills on the 20th.
+		expect(new StatementState().droppedCharges).toEqual(['expense:GYM']);
+	});
+
+	it('counts everything again in one act, including what no page is showing', () => {
+		const state = new StatementState();
+		state.setChargeCounted('expense:GYM', false);
+		state.setChargeCounted('income:BONUS', false);
+
+		state.clearDroppedCharges();
+
+		expect(state.droppedCharges).toEqual([]);
+		expect(new StatementState().droppedCharges).toEqual([]);
+	});
+});
+
+describe('charges the reader adds to the forecast', () => {
+	it('starts with none, so the forecast expects only what it found', () => {
+		expect(new StatementState().addedCharges).toEqual([]);
+	});
+
+	it('keeps one payee once, however often it is vouched for', () => {
+		const state = new StatementState();
+
+		state.addCharge({ kind: 'merchant', merchant: 'VET', flow: 'expense' });
+		state.addCharge({ kind: 'merchant', merchant: 'VET', flow: 'expense' });
+
+		expect(state.addedCharges).toEqual([{ kind: 'merchant', merchant: 'VET', flow: 'expense' }]);
+	});
+
+	it('counts a charge again when it is added back after being ticked off', () => {
+		const state = new StatementState();
+		state.setChargeCounted('expense:VET', false);
+
+		state.addCharge({ kind: 'merchant', merchant: 'VET', flow: 'expense' });
+
+		expect(state.droppedCharges).toEqual([]);
+	});
+
+	it('takes a charge back out, and its tick with it', () => {
+		const state = new StatementState();
+		state.addCharge({ kind: 'merchant', merchant: 'VET', flow: 'expense' });
+		state.setChargeCounted('expense:VET', false);
+
+		state.removeCharge('expense:VET');
+
+		expect(state.addedCharges).toEqual([]);
+		expect(state.droppedCharges).toEqual([]);
+	});
+
+	it('un-vouches a payee rather than striking it through', () => {
+		// Ticking one of last month's payees is what put the row there, so
+		// unticking it should take the row away again — not leave a struck line
+		// only a different control can undo.
+		const state = new StatementState();
+		state.addCharge({ kind: 'merchant', merchant: 'VET', flow: 'expense' });
+
+		state.stopCounting('expense:VET');
+
+		expect(state.addedCharges).toEqual([]);
+		expect(state.droppedCharges).toEqual([]);
+	});
+
+	it('keeps a charge the reader typed, and merely stops counting it', () => {
+		// Retyping one is not one click, so the row is the only copy of it.
+		const state = new StatementState();
+		state.addCharge({
+			kind: 'custom',
+			id: 'r1',
+			name: 'Rent',
+			flow: 'expense',
+			amount: 8000,
+			day: 25,
+			category: ''
+		});
+
+		state.stopCounting('custom:r1');
+
+		expect(state.addedCharges).toHaveLength(1);
+		expect(state.droppedCharges).toEqual(['custom:r1']);
+	});
+
+	it('stops counting a charge the history found, and keeps its row', () => {
+		const state = new StatementState();
+
+		state.stopCounting('expense:GYM');
+
+		expect(state.droppedCharges).toEqual(['expense:GYM']);
+	});
+
+	it('leaves a charge it did not add alone, tick and all', () => {
+		// The gym is the statement's own finding, so there is nothing here to
+		// remove — and counting it again would undo a choice about something else.
+		const state = new StatementState();
+		state.setChargeCounted('expense:GYM', false);
+
+		state.removeCharge('expense:GYM');
+
+		expect(state.droppedCharges).toEqual(['expense:GYM']);
+	});
+
+	it('remembers them for the next visit', () => {
+		new StatementState().addCharge({ kind: 'merchant', merchant: 'VET', flow: 'expense' });
+
+		expect(new StatementState().addedCharges).toEqual([
+			{ kind: 'merchant', merchant: 'VET', flow: 'expense' }
+		]);
 	});
 });

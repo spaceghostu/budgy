@@ -16,6 +16,7 @@ import {
 	sumAmounts
 } from './balance.ts';
 import { mean, median } from './average.ts';
+import { CALENDAR_START, cycleOf } from './cycle.ts';
 import { normaliseType } from '../parse/normalise.ts';
 
 /** Above this many days, the flow chart buckets by month instead. */
@@ -96,10 +97,12 @@ export function anchorForSlice(
  * @param transactions Oldest first, already filtered.
  * @param closingBalance Balance after the most recent transaction. See
  * {@link buildBalanceSeries} for why this anchor is needed.
+ * @param start Day of the month a month opens on. See {@link cycleOf}.
  */
 export function buildInsights(
 	transactions: readonly Transaction[],
-	closingBalance: number
+	closingBalance: number,
+	start: number = CALENDAR_START
 ): Insights {
 	const balanceSeries = buildBalanceSeries(transactions, closingBalance);
 	const dailyFlow = buildDailyFlow(transactions, balanceSeries);
@@ -112,11 +115,11 @@ export function buildInsights(
 		summary: buildSummary(transactions, dailyFlow, balanceSeries),
 		balanceSeries,
 		dailyFlow,
-		flow: flowIsMonthly ? groupFlowByMonth(dailyFlow) : dailyFlow,
+		flow: flowIsMonthly ? groupFlowByMonth(dailyFlow, start) : dailyFlow,
 		flowIsMonthly,
 		categories: bucketBy(expenses, (transaction) => transaction.category),
 		merchants: bucketBy(expenses, (transaction) => transaction.merchant),
-		recurring: findRecurring(expenses),
+		recurring: findRecurring(expenses, start),
 		largestExpenses: [...expenses]
 			.sort((a, b) => a.amount - b.amount)
 			.slice(0, LARGEST_EXPENSE_COUNT)
@@ -233,7 +236,10 @@ export function bucketBy(
  * A short statement therefore surfaces only the debit orders. Two weeks of
  * data cannot evidence a monthly pattern, and saying so beats guessing.
  */
-export function findRecurring(expenses: readonly Transaction[]): readonly RecurringCharge[] {
+export function findRecurring(
+	expenses: readonly Transaction[],
+	start: number = CALENDAR_START
+): readonly RecurringCharge[] {
 	const groups = new Map<string, Transaction[]>();
 	for (const transaction of expenses) {
 		if (transaction.isFee) continue;
@@ -241,7 +247,7 @@ export function findRecurring(expenses: readonly Transaction[]): readonly Recurr
 	}
 
 	return [...groups.entries()]
-		.map(([merchant, charges]) => toRecurringCharge(merchant, charges))
+		.map(([merchant, charges]) => toRecurringCharge(merchant, charges, start))
 		.filter((charge) => charge.isDebitOrder || looksLikeSubscription(charge))
 		.map(toPublicCharge)
 		.sort((a, b) => b.latestAmount - a.latestAmount);
@@ -279,7 +285,11 @@ type ScoredCharge = RecurringCharge & {
 	readonly fattestMonth: number;
 };
 
-function toRecurringCharge(merchant: string, charges: readonly Transaction[]): ScoredCharge {
+function toRecurringCharge(
+	merchant: string,
+	charges: readonly Transaction[],
+	start: number
+): ScoredCharge {
 	const latest = charges.reduce((newest, charge) =>
 		charge.timestamp >= newest.timestamp ? charge : newest
 	);
@@ -291,7 +301,7 @@ function toRecurringCharge(merchant: string, charges: readonly Transaction[]): S
 	// lender collecting two instalments on one day is one monthly outgoing.
 	const byMonth = new Map<string, number>();
 	for (const charge of charges) {
-		const month = charge.date.slice(0, 7);
+		const month = cycleOf(charge.date, start);
 		byMonth.set(month, (byMonth.get(month) ?? 0) + Math.abs(charge.amount));
 	}
 

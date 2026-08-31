@@ -1,4 +1,7 @@
 <script lang="ts">
+	import CheckIcon from '@lucide/svelte/icons/check';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { cn } from '$lib/utils.js';
 	import type { SourceKind, SourceSlot } from '../state/statement.svelte.js';
 
 	interface Props {
@@ -49,9 +52,11 @@
 </script>
 
 <section
-	class="picker"
-	class:dragging
-	class:compact
+	class={cn(
+		'rounded-xl bg-card transition-colors duration-100',
+		compact ? 'border p-4' : 'border-[1.5px] border-dashed border-input p-6',
+		dragging && 'border-series bg-muted'
+	)}
 	aria-label="Statement files"
 	ondragover={(event) => {
 		event.preventDefault();
@@ -67,6 +72,7 @@
 	<input
 		bind:this={picker}
 		type="file"
+		class="hidden"
 		multiple
 		{accept}
 		onchange={(event) => {
@@ -76,41 +82,65 @@
 	/>
 
 	{#if !compact}
-		<header>
-			<h2>Choose your statement files</h2>
-			<p>
+		<header class="mb-4.5 text-center">
+			<h2 class="text-xl font-semibold tracking-[-0.02em]">Choose your statement files</h2>
+			<p class="mx-auto mt-1.5 max-w-[48ch] text-sm text-muted-foreground">
 				Add either one, or both together. They are read in this browser and never uploaded anywhere.
 			</p>
 		</header>
 	{/if}
 
-	<ul class="slots">
+	<ul class="grid list-none grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-3 p-0">
 		{#each sources as source (source.kind)}
-			<li class:loaded={source.loaded}>
-				<div class="slot-text">
-					<p class="slot-label">
+			<li
+				class={cn(
+					'flex min-w-0 items-center justify-between gap-3 rounded-md border bg-card',
+					compact ? 'px-3 py-2' : 'px-3.5 py-3',
+					source.loaded && 'border-good'
+				)}
+			>
+				<div class="min-w-0">
+					<p class="flex items-center gap-1 text-[13px] font-semibold">
 						{source.label}
-						{#if source.loaded}<span class="tick" aria-hidden="true">✓</span>{/if}
+						{#if source.loaded}
+							<CheckIcon class="size-3.5 text-positive" aria-hidden="true" />
+						{/if}
 					</p>
-					<p class="slot-hint">
+					<p class="mt-0.5 text-xs text-faint">
 						{#if busy === source.kind}
 							Reading {source.fileName}…
 						{:else if source.loaded}
-							<span class="file-name" title={source.fileName}>{source.fileName}</span>
+							<span
+								class="block max-w-[30ch] truncate text-muted-foreground"
+								title={source.fileName}
+							>
+								{source.fileName}
+							</span>
 						{:else}
 							{source.hint}
 						{/if}
 					</p>
 				</div>
 
-				<div class="slot-actions">
-					<button type="button" onclick={() => choose(source.kind)} disabled={busy !== null}>
+				<div class="flex flex-none gap-1.5">
+					<Button
+						variant="secondary"
+						size="xs"
+						class="border-input font-semibold hover:border-series disabled:cursor-progress"
+						onclick={() => choose(source.kind)}
+						disabled={busy !== null}
+					>
 						{source.loaded ? 'Replace' : 'Choose'}
-					</button>
+					</Button>
 					{#if source.loaded}
-						<button type="button" class="remove" onclick={() => onremove(source.kind)}>
+						<Button
+							variant="outline"
+							size="xs"
+							class="border-input bg-transparent text-muted-foreground hover:border-destructive"
+							onclick={() => onremove(source.kind)}
+						>
 							Remove
-						</button>
+						</Button>
 					{/if}
 				</div>
 			</li>
@@ -118,157 +148,6 @@
 	</ul>
 
 	{#if !compact}
-		<p class="drop-hint">…or drop both files here at once.</p>
+		<p class="mt-3.5 text-center text-xs text-faint">…or drop both files here at once.</p>
 	{/if}
 </section>
-
-<style>
-	.picker {
-		background: var(--surface-1);
-		border: 1.5px dashed var(--border-strong);
-		border-radius: var(--radius-lg);
-		padding: 24px;
-		transition:
-			border-color 120ms ease,
-			background 120ms ease;
-	}
-
-	.picker.compact {
-		padding: 14px 16px;
-		border-style: solid;
-		border-width: 1px;
-		border-color: var(--border);
-	}
-
-	.picker.dragging {
-		border-color: var(--series-1);
-		background: var(--surface-2);
-	}
-
-	input {
-		display: none;
-	}
-
-	header {
-		text-align: center;
-		margin-bottom: 18px;
-	}
-
-	h2 {
-		margin: 0;
-		font-size: 20px;
-		font-weight: 600;
-		letter-spacing: -0.02em;
-	}
-
-	header p {
-		margin: 6px auto 0;
-		max-width: 48ch;
-		font-size: 14px;
-		color: var(--text-secondary);
-	}
-
-	.slots {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-		gap: 12px;
-	}
-
-	li {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		min-width: 0;
-		padding: 12px 14px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		background: var(--surface-1);
-	}
-
-	.compact li {
-		padding: 8px 12px;
-	}
-
-	li.loaded {
-		border-color: var(--status-good);
-	}
-
-	.slot-text {
-		min-width: 0;
-	}
-
-	.slot-text p {
-		margin: 0;
-	}
-
-	.slot-label {
-		font-size: 13px;
-		font-weight: 600;
-	}
-
-	.tick {
-		color: var(--status-good-text);
-		margin-left: 4px;
-	}
-
-	.slot-hint {
-		margin-top: 2px !important;
-		font-size: 12px;
-		color: var(--text-muted);
-	}
-
-	.file-name {
-		display: block;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		max-width: 30ch;
-		color: var(--text-secondary);
-	}
-
-	.slot-actions {
-		flex: none;
-		display: flex;
-		gap: 6px;
-	}
-
-	button {
-		padding: 5px 11px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--surface-2);
-		font-size: 12px;
-		font-weight: 600;
-		cursor: pointer;
-	}
-
-	button:hover:not(:disabled) {
-		border-color: var(--series-1);
-	}
-
-	button:disabled {
-		cursor: progress;
-		opacity: 0.6;
-	}
-
-	button.remove {
-		background: transparent;
-		font-weight: 400;
-		color: var(--text-secondary);
-	}
-
-	button.remove:hover {
-		border-color: var(--status-critical);
-	}
-
-	.drop-hint {
-		margin: 14px 0 0;
-		text-align: center;
-		font-size: 12px;
-		color: var(--text-muted);
-	}
-</style>

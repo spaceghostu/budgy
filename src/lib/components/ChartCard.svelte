@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import * as Card from '$lib/components/ui/card/index.js';
+	import { ToggleGroup, ToggleGroupItem } from '$lib/components/ui/toggle-group/index.js';
 
 	interface Props {
 		title: string;
@@ -24,126 +26,47 @@
 	const id = $props.id();
 </script>
 
-<section class="card" aria-labelledby="{id}-title">
-	<header>
-		<div class="heading">
-			<h2 id="{id}-title">{title}</h2>
-			{#if subtitle}<p class="subtitle">{subtitle}</p>{/if}
-		</div>
+<Card.Root role="region" aria-labelledby="{id}-title" class="min-w-0 [--card-spacing:--spacing(5)]">
+	<Card.Header>
+		<Card.Title id="{id}-title" class="text-[15px] font-semibold tracking-[-0.01em]">
+			{title}
+		</Card.Title>
+		{#if subtitle}
+			<Card.Description class="text-[13px]">{subtitle}</Card.Description>
+		{/if}
 
-		<div class="controls">
+		<Card.Action class="flex items-center gap-2">
 			{@render actions?.()}
 			{#if table}
-				<div class="toggle" role="group" aria-label="{title} view">
-					<button
-						type="button"
-						class:selected={view === 'chart'}
-						aria-pressed={view === 'chart'}
-						onclick={() => (view = 'chart')}>Chart</button
-					>
-					<button
-						type="button"
-						class:selected={view === 'table'}
-						aria-pressed={view === 'table'}
-						onclick={() => (view = 'table')}>Table</button
-					>
-				</div>
+				<ToggleGroup
+					type="single"
+					variant="outline"
+					size="sm"
+					aria-label="{title} view"
+					value={view}
+					onValueChange={(next) => {
+						// A group that can be emptied would leave the card blank.
+						if (next) view = next as 'chart' | 'table';
+					}}
+				>
+					<ToggleGroupItem value="chart">Chart</ToggleGroupItem>
+					<ToggleGroupItem value="table">Table</ToggleGroupItem>
+				</ToggleGroup>
 			{/if}
-		</div>
-	</header>
+		</Card.Action>
+	</Card.Header>
 
 	{#if toolbar}
-		<div class="toolbar">{@render toolbar()}</div>
+		<div class="flex flex-wrap items-end gap-x-[18px] gap-y-2.5 border-b px-(--card-spacing) pb-4">
+			{@render toolbar()}
+		</div>
 	{/if}
 
-	<div class="body">
+	<Card.Content class="min-w-0">
 		{#if view === 'chart' || !table}
 			{@render chart()}
 		{:else}
 			{@render table()}
 		{/if}
-	</div>
-</section>
-
-<style>
-	.card {
-		background: var(--surface-1);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		box-shadow: var(--shadow-card);
-		padding: 20px;
-		min-width: 0;
-	}
-
-	header {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		gap: 16px;
-		margin-bottom: 18px;
-		flex-wrap: wrap;
-	}
-
-	h2 {
-		margin: 0;
-		font-size: 15px;
-		font-weight: 600;
-		letter-spacing: -0.01em;
-	}
-
-	.subtitle {
-		margin: 2px 0 0;
-		font-size: 13px;
-		color: var(--text-secondary);
-	}
-
-	.controls {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-
-	.toggle {
-		display: inline-flex;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		overflow: hidden;
-	}
-
-	.toggle button {
-		background: transparent;
-		border: 0;
-		padding: 4px 10px;
-		font-size: 12px;
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-
-	.toggle button + button {
-		border-left: 1px solid var(--border);
-	}
-
-	.toggle button:hover {
-		background: var(--surface-2);
-	}
-
-	.toggle button.selected {
-		background: var(--surface-2);
-		color: var(--text-primary);
-		font-weight: 600;
-	}
-
-	.toolbar {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: flex-end;
-		gap: 10px 18px;
-		margin: -4px 0 18px;
-		padding-bottom: 16px;
-		border-bottom: 1px solid var(--border);
-	}
-
-	.body {
-		min-width: 0;
-	}
-</style>
+	</Card.Content>
+</Card.Root>

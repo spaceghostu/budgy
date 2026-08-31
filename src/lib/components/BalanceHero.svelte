@@ -1,4 +1,10 @@
 <script lang="ts">
+	import CheckIcon from '@lucide/svelte/icons/check';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import * as Card from '$lib/components/ui/card/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
+	import { cn } from '$lib/utils.js';
 	import { CURRENCY_SYMBOL, formatCurrency, formatDate, formatSigned } from '../format.ts';
 	import { parseAmount } from '../parse/statement.ts';
 	import type { PeriodSummary } from '../types.ts';
@@ -61,203 +67,91 @@
 	}
 </script>
 
-<div class="hero">
-	<div class="figure">
-		<p class="label">
-			{isRelative ? 'Net change over this period' : 'Balance at the end of this period'}
-		</p>
-		<p class="value">
-			{formatCurrency(isRelative ? summary.balanceChange : summary.closingBalance)}
-		</p>
-		<p class="context">
-			{formatDate(summary.from)} – {formatDate(summary.to)} ·
-			{formatSigned(summary.balanceChange)} over {summary.days}
-			{summary.days === 1 ? 'day' : 'days'}
-		</p>
-	</div>
-
-	<div class="anchor">
-		{#if isCertified}
-			<!-- The certified statement prints a balance on every row, so there is
-			     nothing to anchor and nothing for the reader to do here. -->
-			<p class="certified">
-				<span class="tick" aria-hidden="true">✓</span>
-				<span>
-					Balances come from the certified statement{account === '' ? '' : ` for ${account}`}, and
-					every one was checked against the row before it.
-				</span>
+<Card.Root class="[--card-spacing:--spacing(6)]">
+	<Card.Content class="flex flex-wrap items-start justify-between gap-6">
+		<div>
+			<p class="text-[13px] text-muted-foreground">
+				{isRelative ? 'Net change over this period' : 'Balance at the end of this period'}
 			</p>
-		{:else if editing}
-			<form onsubmit={commit}>
-				<label for="anchor-input">Your current balance</label>
-				<div class="row">
-					<span class="prefix">{CURRENCY_SYMBOL}</span>
-					<!-- svelte-ignore a11y_autofocus -->
-					<input
-						id="anchor-input"
-						type="text"
-						inputmode="decimal"
-						placeholder="12500.00"
-						aria-invalid={invalid}
-						aria-describedby="anchor-help"
-						bind:value={draft}
-						autofocus
-					/>
-					<button type="submit" class="primary">Save</button>
-					<button type="button" onclick={() => (editing = false)}>Cancel</button>
-				</div>
-				<p class="help" id="anchor-help" class:invalid>
-					{#if invalid}
-						That is not a number this can read. Try something like 4820.55 or 4820,55.
+			<!-- Proportional figures — tabular digits look loose at display size. -->
+			<p class="mt-1 text-[40px]/[1.05] font-semibold tracking-[-0.03em] min-[620px]:text-[52px]">
+				{formatCurrency(isRelative ? summary.balanceChange : summary.closingBalance)}
+			</p>
+			<p class="mt-2 text-[13px] text-muted-foreground">
+				{formatDate(summary.from)} – {formatDate(summary.to)} ·
+				{formatSigned(summary.balanceChange)} over {summary.days}
+				{summary.days === 1 ? 'day' : 'days'}
+			</p>
+		</div>
+
+		<div class="max-w-[34ch]">
+			{#if isCertified}
+				<!-- The certified statement prints a balance on every row, so there is
+				     nothing to anchor and nothing for the reader to do here. -->
+				<p class="flex items-start gap-2 text-[12.5px] text-muted-foreground">
+					<span
+						class="grid size-4.5 flex-none place-items-center rounded-full bg-good text-card"
+						aria-hidden="true"
+					>
+						<CheckIcon class="size-2.5" />
+					</span>
+					<span>
+						Balances come from the certified statement{account === '' ? '' : ` for ${account}`}, and
+						every one was checked against the row before it.
+					</span>
+				</p>
+			{:else if editing}
+				<form onsubmit={commit}>
+					<Label for="anchor-input" class="text-xs text-muted-foreground">
+						Your current balance
+					</Label>
+					<div class="mt-1.5 flex items-center gap-1.5">
+						<span class="text-faint">{CURRENCY_SYMBOL}</span>
+						<Input
+							id="anchor-input"
+							type="text"
+							inputmode="decimal"
+							placeholder="12500.00"
+							class="w-32 text-[13px] tabular-nums aria-invalid:border-destructive"
+							aria-invalid={invalid}
+							aria-describedby="anchor-help"
+							bind:value={draft}
+							autofocus
+						/>
+						<Button type="submit" variant="secondary" class="border-input font-semibold">
+							Save
+						</Button>
+						<Button variant="outline" class="border-input" onclick={() => (editing = false)}>
+							Cancel
+						</Button>
+					</div>
+					<p
+						id="anchor-help"
+						class={cn('mt-2 text-xs', invalid ? 'text-destructive' : 'text-faint')}
+					>
+						{#if invalid}
+							That is not a number this can read. Try something like 4820.55 or 4820,55.
+						{:else}
+							The figure from your banking app, as of the most recent transaction in this statement.
+							Leave it empty to go back to showing net change. Stored only in this browser.
+						{/if}
+					</p>
+				</form>
+			{:else}
+				<Button variant="secondary" class="border-input font-semibold" onclick={open}>
+					{isRelative ? 'Set your current balance' : 'Change balance'}
+				</Button>
+				<p class="mt-2 text-xs text-faint">
+					{#if isStale}
+						This statement runs to {formatDate(summary.to)}, later than the balance you last entered
+						— re-enter it to make these figures real again.
+					{:else if isRelative}
+						A CSV export lists amounts but no balances. Add yours and every figure becomes real.
 					{:else}
-						The figure from your banking app, as of the most recent transaction in this statement.
-						Leave it empty to go back to showing net change. Stored only in this browser.
+						Anchored to {formatCurrency(anchor)} after the most recent transaction.
 					{/if}
 				</p>
-			</form>
-		{:else}
-			<button type="button" class="primary" onclick={open}>
-				{isRelative ? 'Set your current balance' : 'Change balance'}
-			</button>
-			<p class="help">
-				{#if isStale}
-					This statement runs to {formatDate(summary.to)}, later than the balance you last entered —
-					re-enter it to make these figures real again.
-				{:else if isRelative}
-					A CSV export lists amounts but no balances. Add yours and every figure becomes real.
-				{:else}
-					Anchored to {formatCurrency(anchor)} after the most recent transaction.
-				{/if}
-			</p>
-		{/if}
-	</div>
-</div>
-
-<style>
-	.hero {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: flex-start;
-		justify-content: space-between;
-		gap: 24px;
-		background: var(--surface-1);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		box-shadow: var(--shadow-card);
-		padding: 24px;
-	}
-
-	p {
-		margin: 0;
-	}
-
-	.label {
-		font-size: 13px;
-		color: var(--text-secondary);
-	}
-
-	.value {
-		margin-top: 4px;
-		font-size: 52px;
-		font-weight: 600;
-		line-height: 1.05;
-		letter-spacing: -0.03em;
-		/* Proportional figures — tabular digits look loose at display size. */
-	}
-
-	.context {
-		margin-top: 8px;
-		font-size: 13px;
-		color: var(--text-secondary);
-	}
-
-	.anchor {
-		max-width: 34ch;
-	}
-
-	.row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		margin-top: 6px;
-	}
-
-	label {
-		font-size: 12px;
-		color: var(--text-secondary);
-	}
-
-	.prefix {
-		color: var(--text-muted);
-	}
-
-	input {
-		width: 8em;
-		padding: 6px 10px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--surface-1);
-		font-size: 13px;
-		font-variant-numeric: tabular-nums;
-	}
-
-	button {
-		padding: 6px 12px;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-md);
-		background: var(--surface-1);
-		font-size: 13px;
-		cursor: pointer;
-	}
-
-	button.primary {
-		background: var(--surface-2);
-		font-weight: 600;
-	}
-
-	button:hover {
-		border-color: var(--series-1);
-	}
-
-	.help {
-		margin-top: 8px;
-		font-size: 12px;
-		color: var(--text-muted);
-	}
-
-	.help.invalid {
-		color: var(--status-critical);
-	}
-
-	.certified {
-		display: flex;
-		align-items: flex-start;
-		gap: 8px;
-		font-size: 12.5px;
-		color: var(--text-secondary);
-	}
-
-	.certified .tick {
-		flex: none;
-		display: grid;
-		place-items: center;
-		width: 18px;
-		height: 18px;
-		border-radius: 50%;
-		background: var(--status-good);
-		color: var(--surface-1);
-		font-size: 11px;
-		font-weight: 700;
-		line-height: 1;
-	}
-
-	input[aria-invalid='true'] {
-		border-color: var(--status-critical);
-	}
-
-	@media (max-width: 620px) {
-		.value {
-			font-size: 40px;
-		}
-	}
-</style>
+			{/if}
+		</div>
+	</Card.Content>
+</Card.Root>

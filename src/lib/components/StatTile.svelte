@@ -1,4 +1,6 @@
 <script lang="ts">
+	import * as Card from '$lib/components/ui/card/index.js';
+
 	interface Props {
 		label: string;
 		value: string;
@@ -10,50 +12,19 @@
 	const { label, value, hint, tone = 'neutral' }: Props = $props();
 </script>
 
-<div class="tile">
-	<p class="label">{label}</p>
-	<p class="value" class:good={tone === 'good'} class:critical={tone === 'critical'}>{value}</p>
-	{#if hint}<p class="hint">{hint}</p>{/if}
-</div>
-
-<style>
-	.tile {
-		background: var(--surface-1);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		box-shadow: var(--shadow-card);
-		padding: 16px 18px;
-		min-width: 0;
-	}
-
-	p {
-		margin: 0;
-	}
-
-	.label {
-		font-size: 12px;
-		color: var(--text-secondary);
-	}
-
-	.value {
-		margin-top: 6px;
-		font-size: 24px;
-		font-weight: 600;
-		letter-spacing: -0.02em;
-		/* Proportional figures: tabular-nums reads loose at this size. */
-	}
-
-	.value.good {
-		color: var(--status-good-text);
-	}
-
-	.value.critical {
-		color: var(--status-critical);
-	}
-
-	.hint {
-		margin-top: 4px;
-		font-size: 12px;
-		color: var(--text-muted);
-	}
-</style>
+<Card.Root class="@container min-w-0 gap-0 px-0.5 [--card-spacing:--spacing(4)]">
+	<Card.Content>
+		<p class="text-xs text-muted-foreground">{label}</p>
+		<!-- Held on one line — a currency figure broken across two is unreadable —
+		     and sized to the tile, so a seven-figure balance still fits. -->
+		<p
+			class="mt-1.5 text-[clamp(1rem,11cqi,1.5rem)] font-semibold tracking-[-0.02em] whitespace-nowrap"
+			class:text-positive={tone === 'good'}
+			class:text-destructive={tone === 'critical'}
+		>
+			<!-- Proportional figures: tabular-nums reads loose at this size. -->
+			{value}
+		</p>
+		{#if hint}<p class="mt-1 text-xs text-faint">{hint}</p>{/if}
+	</Card.Content>
+</Card.Root>

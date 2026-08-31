@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMonthlyTotals, listMonths, monthEnd, typicalMonth } from './monthly.ts';
+import { buildMonthlyTotals, listMonths, typicalMonth } from './monthly.ts';
 import { makeTransaction } from '../testing/transaction.ts';
 
 describe('listMonths', () => {
@@ -15,18 +15,6 @@ describe('listMonths', () => {
 
 	it('is empty before a statement is loaded', () => {
 		expect(listMonths([])).toEqual([]);
-	});
-});
-
-describe('monthEnd', () => {
-	it('knows how long each month is', () => {
-		expect(monthEnd('2026-01')).toBe('2026-01-31');
-		expect(monthEnd('2026-04')).toBe('2026-04-30');
-		expect(monthEnd('2026-02')).toBe('2026-02-28');
-	});
-
-	it('knows about leap years', () => {
-		expect(monthEnd('2024-02')).toBe('2024-02-29');
 	});
 });
 
@@ -250,5 +238,44 @@ describe('typicalMonth', () => {
 
 	it('is empty when there is nothing to be typical of', () => {
 		expect(typicalMonth([])).toEqual([]);
+	});
+});
+
+describe('a month that opens on a day of the reader’s choosing', () => {
+	/** Paid on the 25th: June's money is spent from 25 May to 24 June. */
+	const paidOn25 = [
+		makeTransaction({ date: '2026-05-24', amount: -100 }),
+		makeTransaction({ date: '2026-05-25', amount: -200 }),
+		makeTransaction({ date: '2026-06-10', amount: -300 }),
+		makeTransaction({ date: '2026-06-24', amount: -400 })
+	];
+
+	it('lists the cycles the statement touches rather than its calendar months', () => {
+		expect(listMonths(paidOn25, 25)).toEqual(['2026-05', '2026-06']);
+	});
+
+	it('cuts the lines at the chosen day and counts from there', () => {
+		const series = buildMonthlyTotals(paidOn25, 'net', 25);
+
+		expect(series.map((month) => month.month)).toEqual(['2026-05', '2026-06']);
+		// 25 May is the first day of June's cycle, and 10 June its seventeenth.
+		expect(series[1].points[0]).toEqual({ day: 1, total: -200 });
+		expect(series[1].points[16]).toEqual({ day: 17, total: -500 });
+		expect(series[1].total).toBe(-900);
+	});
+
+	it('runs a finished cycle to its own last day, not the month’s', () => {
+		const series = buildMonthlyTotals(
+			[
+				makeTransaction({ date: '2026-05-25', amount: -100 }),
+				makeTransaction({ date: '2026-06-25', amount: -100 })
+			],
+			'net',
+			25
+		);
+
+		// 25 May to 24 June is 31 days.
+		expect(series[0].points).toHaveLength(31);
+		expect(series[0].isPartial).toBe(false);
 	});
 });

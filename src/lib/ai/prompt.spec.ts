@@ -4,6 +4,7 @@ import {
 	MAX_NOTE_LENGTH,
 	REPORT_TOOL,
 	SYSTEM_PROMPT,
+	buildFollowUp,
 	buildUserPrompt
 } from './prompt.ts';
 import { buildAiPayload } from './payload.ts';
@@ -66,6 +67,27 @@ describe('buildUserPrompt', () => {
 
 		expect(prompt).toContain('x'.repeat(MAX_NOTE_LENGTH));
 		expect(prompt).not.toContain('x'.repeat(MAX_NOTE_LENGTH + 1));
+	});
+});
+
+describe('SYSTEM_PROMPT, on a follow-up', () => {
+	it('says a follow-up brings no new figures with it', () => {
+		expect(SYSTEM_PROMPT).toMatch(/follow-up/i);
+		expect(SYSTEM_PROMPT).toMatch(/same figures/i);
+	});
+});
+
+describe('buildFollowUp', () => {
+	it('passes the question through word for word', () => {
+		expect(buildFollowUp('Break down those bank fees.')).toBe('Break down those bank fees.');
+	});
+
+	it('is blank when there is nothing but whitespace to send', () => {
+		expect(buildFollowUp('   \n ')).toBe('');
+	});
+
+	it('caps a follow-up exactly as it caps a note', () => {
+		expect(buildFollowUp('x'.repeat(MAX_NOTE_LENGTH + 200))).toHaveLength(MAX_NOTE_LENGTH);
 	});
 });
 

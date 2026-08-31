@@ -1,0 +1,267 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn-svelte/tailwind.css';
+
+/*
+ * Design tokens.
+ *
+ * shadcn's semantic names sit on top of the project's own palette rather than
+ * replacing it: the chart colours come from the validated reference palette,
+ * and both modes were checked with the palette validator (all six checks pass).
+ * Text never wears a series colour — identity comes from the mark beside it.
+ *
+ * Dark mode has three states, so the variant below has to match all of them:
+ * an explicit choice stamps data-theme on the root, and the unstamped default
+ * follows the system preference.
+ */
+
+@custom-variant dark {
+	&:where([data-theme='dark'], [data-theme='dark'] *) {
+		@slot;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		&:where(:root:not([data-theme='light']), :root:not([data-theme='light']) *) {
+			@slot;
+		}
+	}
+}
+
+:root {
+	color-scheme: light;
+
+	/* Semantic surfaces. */
+	--background: #f9f9f7;
+	--foreground: #0b0b0b;
+	--card: #fcfcfb;
+	--card-foreground: #0b0b0b;
+	--popover: #fcfcfb;
+	--popover-foreground: #0b0b0b;
+	--secondary: #f2f1ed;
+	--secondary-foreground: #0b0b0b;
+	--muted: #f2f1ed;
+	--muted-foreground: #52514e;
+	--accent: #f2f1ed;
+	--accent-foreground: #0b0b0b;
+
+	/* Chrome stays quiet: nothing on this page is a big blue button, so the
+	   solid control colour is the text colour, and blue is kept for the marks
+	   that carry meaning. */
+	--primary: #0b0b0b;
+	--primary-foreground: #f9f9f7;
+	--destructive: #d03b3b;
+
+	--border: rgba(11, 11, 11, 0.1);
+	--input: rgba(11, 11, 11, 0.18);
+	--ring: #2a78d6;
+
+	--radius: 0.625rem;
+
+	/* The faintest of the three text weights — below --muted-foreground. */
+	--faint: #898781;
+
+	/* Chart furniture. */
+	--grid: #e1e0d9;
+	--axis: #c3c2b7;
+
+	/* Categorical slot 1 — every single-series chart. */
+	--series-1: #2a78d6;
+	/* The pale step of the same blue ramp, for context lines behind the one
+	   being read. Two ordinal steps, validated against this surface. */
+	--series-context: #86b6ef;
+	/* An ordinal ramp of the same blue, oldest to newest, for a fan of lines
+	   where age is the thing being read. Five steps rather than more: the
+	   validator wants a visible lightness gap between neighbours, and the ramp
+	   has no room for a sixth above the light end's contrast floor.
+
+	   The steps run as far apart as that floor allows — the palest is pinned
+	   where it sits (2.06:1, just clear of the 2:1 ordinal floor) and the rest
+	   walk down past it, so a line's age reads before its shape does. */
+	--recency-1: #86b6ef;
+	--recency-2: #3a8ef0;
+	--recency-3: #1e69c0;
+	--recency-4: #0f478b;
+	--recency-5: #042858;
+	/* Diverging poles: money in vs money out. */
+	--diverge-in: #2a78d6;
+	--diverge-out: #e34948;
+
+	--status-good: #0ca30c;
+	--status-good-text: #006300;
+	--status-warning: #fab219;
+
+	--card-shadow: 0 1px 2px rgba(11, 11, 11, 0.04);
+
+	--mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:where(:not([data-theme='light'])) {
+		color-scheme: dark;
+
+		--background: #0d0d0d;
+		--foreground: #ffffff;
+		--card: #1a1a19;
+		--card-foreground: #ffffff;
+		--popover: #232322;
+		--popover-foreground: #ffffff;
+		--secondary: #232322;
+		--secondary-foreground: #ffffff;
+		--muted: #232322;
+		--muted-foreground: #c3c2b7;
+		--accent: #232322;
+		--accent-foreground: #ffffff;
+
+		--primary: #ffffff;
+		--primary-foreground: #0d0d0d;
+		--destructive: #d03b3b;
+
+		--border: rgba(255, 255, 255, 0.1);
+		--input: rgba(255, 255, 255, 0.18);
+		--ring: #3987e5;
+
+		--faint: #898781;
+
+		--grid: #2c2c2a;
+		--axis: #383835;
+
+		--series-1: #3987e5;
+		--series-context: #184f95;
+		/* The same ramp, stepped for the dark surface: age still darkens away
+		   from the reader, which on this ground means towards the background. */
+		--recency-1: #184f95;
+		--recency-2: #206fcb;
+		--recency-3: #4593f0;
+		--recency-4: #89b8f2;
+		--recency-5: #c4dcf8;
+		--diverge-in: #3987e5;
+		--diverge-out: #e66767;
+
+		--status-good: #0ca30c;
+		--status-good-text: #0ca30c;
+
+		--card-shadow: none;
+	}
+}
+
+:root[data-theme='dark'] {
+	color-scheme: dark;
+
+	--background: #0d0d0d;
+	--foreground: #ffffff;
+	--card: #1a1a19;
+	--card-foreground: #ffffff;
+	--popover: #232322;
+	--popover-foreground: #ffffff;
+	--secondary: #232322;
+	--secondary-foreground: #ffffff;
+	--muted: #232322;
+	--muted-foreground: #c3c2b7;
+	--accent: #232322;
+	--accent-foreground: #ffffff;
+
+	--primary: #ffffff;
+	--primary-foreground: #0d0d0d;
+	--destructive: #d03b3b;
+
+	--border: rgba(255, 255, 255, 0.1);
+	--input: rgba(255, 255, 255, 0.18);
+	--ring: #3987e5;
+
+	--faint: #898781;
+
+	--grid: #2c2c2a;
+	--axis: #383835;
+
+	--series-1: #3987e5;
+	--series-context: #184f95;
+	--recency-1: #184f95;
+	--recency-2: #206fcb;
+	--recency-3: #4593f0;
+	--recency-4: #89b8f2;
+	--recency-5: #c4dcf8;
+	--diverge-in: #3987e5;
+	--diverge-out: #e66767;
+
+	--status-good: #0ca30c;
+	--status-good-text: #0ca30c;
+
+	--card-shadow: none;
+}
+
+@theme inline {
+	--font-sans: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--font-mono: var(--mono);
+
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+
+	/* Project colours, as utilities: text-faint, stroke-grid, bg-money-out. */
+	--color-faint: var(--faint);
+	--color-grid: var(--grid);
+	--color-axis: var(--axis);
+	--color-series: var(--series-1);
+	--color-series-context: var(--series-context);
+	--color-money-in: var(--diverge-in);
+	--color-money-out: var(--diverge-out);
+	--color-good: var(--status-good);
+	--color-positive: var(--status-good-text);
+	--color-warning: var(--status-warning);
+
+	--shadow-card: var(--card-shadow);
+
+	--radius-sm: calc(var(--radius) * 0.6);
+	--radius-md: calc(var(--radius) * 0.8);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) * 1.4);
+	--radius-2xl: calc(var(--radius) * 1.8);
+	--radius-3xl: calc(var(--radius) * 2.2);
+	--radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+
+	html {
+		@apply font-sans;
+	}
+
+	body {
+		@apply bg-background text-[15px]/[1.5] text-foreground antialiased;
+	}
+
+	a {
+		@apply text-series;
+	}
+
+	:where(:focus-visible) {
+		@apply rounded-sm outline-2 outline-offset-2 outline-ring;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		*,
+		*::before,
+		*::after {
+			animation-duration: 0.01ms !important;
+			transition-duration: 0.01ms !important;
+		}
+	}
+}

@@ -221,3 +221,58 @@ export interface Insights {
 	readonly recurring: readonly RecurringCharge[];
 	readonly largestExpenses: readonly Transaction[];
 }
+
+/** What a month-against-month comparison rolls spending up by. */
+export type CompareDimension = 'category' | 'merchant';
+
+/** One category or merchant, across the months being compared. */
+export interface ComparisonRow {
+	readonly label: string;
+	/**
+	 * One total per month in {@link MonthComparison.months}, in the same order.
+	 * Positive magnitudes, and `0` for a month the label never appeared in — a
+	 * gap would read as unknown where the truth is that nothing was spent.
+	 */
+	readonly totals: readonly number[];
+	/** Positive. Everything the label took across all of those months. */
+	readonly total: number;
+	readonly count: number;
+	/**
+	 * The newest compared month's total less the month before it — signed, so a
+	 * negative change is money no longer going here.
+	 *
+	 * The last two rather than the first and last: with six months on screen the
+	 * question a reader is asking is what moved *this* month, and the whole run
+	 * is already in front of them to read the longer drift off.
+	 */
+	readonly change: number;
+	/**
+	 * {@link change} as a fraction of the month before, or `null` when that month
+	 * was zero — spending that started from nothing has no percentage to grow by.
+	 */
+	readonly changeShare: number | null;
+}
+
+/** One month's column in a comparison. */
+export interface ComparisonMonth {
+	/** `YYYY-MM`. */
+	readonly month: string;
+	/** Positive. Everything spent in the month, across every label. */
+	readonly total: number;
+	/**
+	 * True when the statement may not cover the whole month, as
+	 * {@link MonthSeries.isPartial} means it — and it matters more here, because
+	 * a month the export stops half-way into looks like a month of thrift beside
+	 * a whole one.
+	 */
+	readonly isPartial: boolean;
+}
+
+/** Spending by category or merchant, month against month. */
+export interface MonthComparison {
+	readonly dimension: CompareDimension;
+	/** Oldest first, one per month compared. */
+	readonly months: readonly ComparisonMonth[];
+	/** Heaviest first, across every month compared. */
+	readonly rows: readonly ComparisonRow[];
+}

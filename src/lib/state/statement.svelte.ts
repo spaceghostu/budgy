@@ -16,19 +16,33 @@ import {
 	buildInsights,
 	filterTransactions
 } from '../stats/insights.ts';
-import { hasPrintedBalances } from '../stats/balance.ts';
+import { buildBalanceSeries, hasPrintedBalances, usesPrintedBalances } from '../stats/balance.ts';
+import { CALENDAR_START, readMonthStart } from '../stats/cycle.ts';
+import { addedKey, type AddedCharge } from '../stats/forecast.ts';
 import { listMonths } from '../stats/monthly.ts';
+import { buildNetWorth } from '../stats/networth.ts';
 import type { Insights, ParseIssue, Transaction } from '../types.ts';
+import { StatementLibrary } from './library.svelte.ts';
+import type { StatementSummary } from './library.ts';
 import {
 	clearKey,
+	loadAddedCharges,
 	loadAnchors,
 	loadCategoryRules,
+	loadDroppedCharges,
 	loadFiles,
+	loadMonthStart,
+	loadOwnCategories,
+	loadRecentCategories,
+	saveAddedCharges,
 	saveAnchors,
 	saveCategoryRules,
-	saveFiles,
-	type Anchor,
-	type StoredFiles
+	saveDroppedCharges,
+	saveMonthStart,
+	saveOwnCategories,
+	saveRecentCategories,
+	withRecentCategory,
+	type Anchor
 } from './persistence.ts';
 import { ALL_ACCOUNTS, busiestAccount, resolveRange, type RangePreset } from './range.ts';
 
@@ -54,6 +68,11 @@ export interface SourceSlot {
  * carries the running balance for every account, and a Smart Search CSV, which
  * carries the bank's categories. Either alone works; together they are merged,
  * and everything below is derived so no two figures on screen can disagree.
+ *
+ * That pair is one *statement*, and every one uploaded is filed into
+ * {@link library} rather than replacing the last — which is what makes a year of
+ * exports a history you can step back through. Adding the second file to the
+ * statement on screen completes that entry; starting a new one files the next.
  */
 export class StatementState {
 	pdfName = $state('');
@@ -73,14 +92,48 @@ export class StatementState {
 	/** `YYYY-MM` the month view is parked on. Blank means the newest month. */
 	selectedMonth = $state('');
 
+	/**
+	 * The day of the month the reader's months open on.
+	 *
+	 * Money does not always run from the 1st — a reader paid on the 25th lives in
+	 * months that open on the 25th. Kept here rather than per page because it is
+	 * one answer to "what is a month", and every month-shaped figure in the app
+	 * has to give the same one. See {@link cycleOf}.
+	 */
+	monthStart = $state(CALENDAR_START);
+
 	/** Balance anchors by account key, for the CSV-only case. */
 	anchors = $state<Record<string, Anchor>>({});
 	/** Categories the reader chose for merchants the bank left unfiled. */
 	categoryRules = $state<CategoryRules>({});
-	remember = $state(false);
+	/** Category names the reader made up, kept whether or not a rule uses one. */
+	ownCategories = $state<readonly string[]>([]);
+	/**
+	 * Charges the reader has told the forecast are not coming.
+	 *
+	 * Kept here rather than on the page so the choice survives a visit to another
+	 * page and a reload — the history will go on saying the gym bills on the 20th
+	 * long after it was cancelled, and the reader should only have to say
+	 * otherwise once. See {@link ExpectedPayment.key} for what the strings are.
+	 */
+	droppedCharges = $state<readonly string[]>([]);
+	/**
+	 * Charges the reader has added to the forecast themselves.
+	 *
+	 * Kept beside {@link droppedCharges} because they are the same act from two
+	 * directions — the reader correcting what the history could and could not
+	 * see — and neither should have to be said twice. See {@link AddedCharge}.
+	 */
+	addedCharges = $state<readonly AddedCharge[]>([]);
+	/** The categories last chosen, most recent first. */
+	recentCategories = $state<readonly string[]>([]);
 
-	/** The raw files, kept so "remember these files" can re-save them. */
-	private files = $state<StoredFiles>({});
+	/** Every statement kept on this device, and which of them is on screen. */
+	readonly library = new StatementLibrary();
+
+	/** The files behind the open statement, kept so it can be re-filed whole. */
+	private pdfBytes: Uint8Array | null = null;
+	private csvText = '';
 
 	private readonly merged = $derived(mergeStatements(this.pdfStatement, this.csvTransactions));
 
@@ -135,7 +188,7 @@ export class StatementState {
 	readonly earliestDate = $derived(this.accountTransactions.at(0)?.date ?? '');
 
 	/** Every month this account has, oldest first — what the stepper walks. */
-	readonly months = $derived(listMonths(this.accountTransactions));
+	readonly months = $derived(listMonths(this.accountTransactions, this.monthStart));
 
 	/**
 	 * The month actually being shown.
@@ -154,7 +207,8 @@ export class StatementState {
 			customTo: this.customTo,
 			earliestDate: this.earliestDate,
 			latestDate: this.latestDate,
-			selectedMonth: this.activeMonth
+			selectedMonth: this.activeMonth,
+			monthStart: this.monthStart
 		})
 	);
 
@@ -209,9 +263,57 @@ export class StatementState {
 		!this.balancesAreCertified && (this.storedAnchor === undefined || this.isAnchorStale)
 	);
 
-	readonly insights: Insights = $derived(
-		buildInsights(this.visible, anchorForSlice(this.accountTransactions, this.visible, this.anchor))
+	/**
+	 * What the account stands at on {@link latestDate}.
+	 *
+	 * Read from the whole account history rather than the period on screen,
+	 * because a balance is not a property of a date range: filtering to last week
+	 * does not change what is in the bank. The forecast is the one page that
+	 * needs this — everything else is asking about a period — and it hides the
+	 * period row for the same reason.
+	 */
+	readonly balanceNow = $derived(
+		buildBalanceSeries(this.accountTransactions, this.anchor).at(-1)?.balance ?? 0
 	);
+
+	/**
+	 * True while {@link balanceNow} is a shape rather than real money.
+	 *
+	 * The same question {@link isRelative} answers, asked of the whole history
+	 * instead of the visible slice — and asked through the very function that
+	 * builds the series, so the two cannot disagree about whether the number is
+	 * the bank's or an anchor's.
+	 */
+	readonly balanceNowIsRelative = $derived(
+		!usesPrintedBalances(this.accountTransactions) &&
+			(this.storedAnchor === undefined || this.storedAnchor.asOf !== this.latestDate)
+	);
+
+	/**
+	 * Entered balances by account, with stale ones dropped.
+	 *
+	 * Keyed by account rather than by the current selection, because net worth
+	 * has to add up accounts the reader is not looking at. The all-accounts key
+	 * is a selection and not an account, so it never contributes.
+	 */
+	private readonly accountAnchors = $derived(this.resolveAnchors());
+
+	readonly insights: Insights = $derived(
+		buildInsights(
+			this.visible,
+			anchorForSlice(this.accountTransactions, this.visible, this.anchor),
+			this.monthStart
+		)
+	);
+
+	/**
+	 * Net worth across every account, over the statement's whole history.
+	 *
+	 * Deliberately built from {@link transactions} rather than the filtered
+	 * slice: a level needs the whole chain behind it, and net worth is not a
+	 * question about one account or one period.
+	 */
+	readonly netWorth = $derived(buildNetWorth(this.transactions, this.accountAnchors));
 
 	/**
 	 * What the categoriser offers: this statement's own categories, the bank's,
@@ -219,7 +321,21 @@ export class StatementState {
 	 * particular files do not happen to mention.
 	 */
 	readonly categoryOptions = $derived(
-		categoryOptions(this.transactions, Object.values(this.categoryRules))
+		categoryOptions(this.transactions, [
+			...Object.values(this.categoryRules),
+			...this.ownCategories
+		])
+	);
+
+	/**
+	 * The shortlist the picker offers above the full list.
+	 *
+	 * Filtered against the options rather than shown raw, so a category that only
+	 * existed in a statement since replaced cannot be offered as a choice that
+	 * then resolves to nothing.
+	 */
+	readonly recentOptions = $derived(
+		this.recentCategories.filter((category) => this.categoryOptions.includes(category))
 	);
 
 	/** Merchants in the current view that are still unfiled, heaviest first. */
@@ -229,24 +345,116 @@ export class StatementState {
 	readonly appliedRules = $derived(listRules(this.categoryRules, this.merged.transactions));
 
 	constructor() {
+		this.monthStart = loadMonthStart();
 		this.anchors = loadAnchors();
 		this.categoryRules = loadCategoryRules();
+		this.ownCategories = loadOwnCategories();
+		this.recentCategories = loadRecentCategories();
+		this.droppedCharges = loadDroppedCharges();
+		this.addedCharges = loadAddedCharges();
 	}
 
-	/** Re-open the files the user chose to keep on this device. */
+	/**
+	 * Read the history, and re-open the statement this browser was last on.
+	 *
+	 * Called once for the whole app rather than per page: the state is shared
+	 * across routes, so landing on any of them restores the same statement.
+	 */
 	async restore(): Promise<void> {
+		await this.library.refresh();
+		if (await this.adoptLegacyFiles()) return;
+
+		const id = this.library.activeId;
+		if (id !== '') await this.openEntry(id);
+	}
+
+	/**
+	 * File whatever an older version of the app was keeping, then forget its key.
+	 *
+	 * That scheme held one statement in local storage and replaced it on the next
+	 * upload. Dropping it silently on first load would lose the statement the
+	 * reader had asked to keep, so it becomes the first entry in the history.
+	 *
+	 * @returns true when a statement was adopted and is now on screen.
+	 */
+	private async adoptLegacyFiles(): Promise<boolean> {
 		const stored = loadFiles();
-		if (stored.csv === undefined && stored.pdf === undefined) return;
+		if (stored.csv === undefined && stored.pdf === undefined) return false;
 
-		this.remember = true;
-		this.files = stored;
+		clearKey('files');
 
+		this.reset();
 		if (stored.pdf !== undefined) {
 			await this.applyPdf(toBytes(stored.pdf.base64), stored.pdf.name, { persist: false });
 		}
 		if (stored.csv !== undefined) {
-			this.applyCsv(stored.csv.text, stored.csv.name, { persist: false });
+			await this.applyCsv(stored.csv.text, stored.csv.name, { persist: false });
 		}
+		if (!this.hasStatement) return false;
+
+		this.library.setActive('');
+		await this.saveCurrent();
+		return true;
+	}
+
+	/** Put a saved statement on screen, in place of whatever is there now. */
+	async openEntry(id: string): Promise<void> {
+		const payload = await this.library.open(id);
+		if (payload === null) {
+			// Deleted in another tab, or the store was cleared under us.
+			if (this.library.activeId === id) this.library.setActive('');
+			return;
+		}
+
+		this.reset();
+		this.busy = payload.pdf !== undefined ? 'pdf' : 'csv';
+		try {
+			if (payload.pdf !== undefined) {
+				await this.applyPdf(payload.pdf.bytes, payload.pdf.name, { persist: false });
+			}
+			if (payload.csv !== undefined) {
+				await this.applyCsv(payload.csv.text, payload.csv.name, { persist: false });
+			}
+		} finally {
+			this.busy = null;
+		}
+	}
+
+	/**
+	 * Clear the screen so the next upload starts its own entry.
+	 *
+	 * Not a delete: the statement being closed is already filed, and this is the
+	 * difference between adding February's export to January's statement and
+	 * filing it as February's.
+	 */
+	startNew(): void {
+		this.reset();
+		this.library.setActive('');
+	}
+
+	/** Take a statement out of the history, closing it if it is the one open. */
+	async deleteEntry(id: string): Promise<void> {
+		const wasOpen = this.library.activeId === id;
+
+		await this.library.remove(id);
+		if (wasOpen) this.reset();
+	}
+
+	/** Forget every saved statement, and close the one on screen. */
+	async clearAll(): Promise<void> {
+		this.reset();
+		await this.library.clearAll();
+	}
+
+	/**
+	 * Turn keeping uploads on this device on or off.
+	 *
+	 * Turning it back on files what is already on screen, so the setting reads as
+	 * "keep my statements" rather than "keep the ones after this".
+	 */
+	async setKeepUploads(keep: boolean): Promise<void> {
+		await this.library.setKeepUploads(keep);
+		if (keep) await this.saveCurrent();
 	}
 
 	/**
@@ -267,7 +475,7 @@ export class StatementState {
 			if (kind === 'pdf') {
 				await this.applyPdf(new Uint8Array(await file.arrayBuffer()), file.name);
 			} else {
-				this.applyCsv(await file.text(), file.name);
+				await this.applyCsv(await file.text(), file.name);
 			}
 		} catch (error: unknown) {
 			this.error = describe(error, file.name);
@@ -286,31 +494,91 @@ export class StatementState {
 
 			this.pdfStatement = statement;
 			this.pdfName = fileName;
+			this.pdfBytes = bytes;
 			this.error = null;
 			this.selectDefaultAccount();
 
-			this.files = { ...this.files, pdf: { name: fileName, base64: toBase64(bytes) } };
-			if (options.persist !== false) this.persist();
+			if (options.persist !== false) await this.saveCurrent();
 		} catch (error: unknown) {
 			this.error = describe(error, fileName);
 		}
 	}
 
-	private applyCsv(text: string, fileName: string, options: { persist?: boolean } = {}): void {
+	private async applyCsv(
+		text: string,
+		fileName: string,
+		options: { persist?: boolean } = {}
+	): Promise<void> {
 		try {
 			const result = parseStatement(text);
 
 			this.csvTransactions = result.transactions;
 			this.csvIssues = result.issues;
 			this.csvName = fileName;
+			this.csvText = text;
 			this.error = null;
 			this.selectDefaultAccount();
 
-			this.files = { ...this.files, csv: { name: fileName, text } };
-			if (options.persist !== false) this.persist();
+			if (options.persist !== false) await this.saveCurrent();
 		} catch (error: unknown) {
 			this.error = describe(error, fileName);
 		}
+	}
+
+	/**
+	 * File the statement on screen, under the entry it belongs to.
+	 *
+	 * A statement with no entry yet is given one here, which is what makes the
+	 * first file of a pair open a new history entry and the second update it.
+	 */
+	private async saveCurrent(): Promise<void> {
+		if (!this.hasStatement) return;
+		// Checked before an id is handed out, not just before the write: an id
+		// pointing at a statement that was never filed would send the next visit
+		// looking for one, and it would report the miss as something going wrong.
+		if (!this.library.keepUploads) return;
+
+		if (this.library.activeId === '') this.library.setActive(crypto.randomUUID());
+
+		await this.library.save(this.library.activeId, {
+			pdf: this.pdfBytes === null ? undefined : { name: this.pdfName, bytes: this.pdfBytes },
+			csv: this.csvText === '' ? undefined : { name: this.csvName, text: this.csvText },
+			summary: this.summarise()
+		});
+	}
+
+	/**
+	 * The stored anchors, reduced to the ones still true of this statement.
+	 *
+	 * An anchor is measured after an account's most recent transaction, so a
+	 * newer export moves the ground under it: the account name is unchanged and
+	 * the balance is stale. Each is checked against its own account's last date
+	 * rather than the statement's, since accounts stop on different days.
+	 */
+	private resolveAnchors(): Record<string, number> {
+		const lastDates: Record<string, string> = {};
+		// Oldest first, so the last date written for an account is its most recent.
+		for (const transaction of this.transactions) lastDates[transaction.account] = transaction.date;
+
+		const resolved: Record<string, number> = {};
+		for (const [account, anchor] of Object.entries(this.anchors)) {
+			if (account === ALL_ACCOUNTS) continue;
+			if (anchor.asOf !== lastDates[account]) continue;
+
+			resolved[account] = anchor.balance;
+		}
+
+		return resolved;
+	}
+
+	/** What the history list says about this statement, without reopening it. */
+	private summarise(): StatementSummary {
+		return {
+			from: this.transactions[0]?.date ?? '',
+			to: this.transactions.at(-1)?.date ?? '',
+			accounts: [...this.accounts],
+			transactionCount: this.transactions.length
+		};
 	}
 
 	/**
@@ -327,6 +595,20 @@ export class StatementState {
 		this.selectedMonth = '';
 	}
 
+	/**
+	 * Move the day the reader's months open on.
+	 *
+	 * The month picker's selection is left alone: it is re-derived against the new
+	 * cut, and {@link activeMonth} already falls back to the newest month when the
+	 * one it named no longer exists.
+	 *
+	 * @param day 1 to 28 — see {@link readMonthStart} for why it stops there.
+	 */
+	setMonthStart(day: number): void {
+		this.monthStart = readMonthStart(day);
+		saveMonthStart(this.monthStart);
+	}
+
 	/** Step the month view one month either way, stopping at the ends. */
 	stepMonth(offset: number): void {
 		const index = this.months.indexOf(this.activeMonth);
@@ -336,21 +618,28 @@ export class StatementState {
 		if (next !== undefined) this.selectedMonth = next;
 	}
 
-	remove(kind: SourceKind): void {
+	async remove(kind: SourceKind): Promise<void> {
 		if (kind === 'pdf') {
 			this.pdfStatement = null;
 			this.pdfName = '';
-			this.files = { ...this.files, pdf: undefined };
+			this.pdfBytes = null;
 		} else {
 			this.csvTransactions = [];
 			this.csvIssues = [];
 			this.csvName = '';
-			this.files = { ...this.files, csv: undefined };
+			this.csvText = '';
 		}
 
 		this.error = null;
-		if (this.hasStatement) this.selectDefaultAccount();
-		if (this.remember) this.persist();
+		if (this.hasStatement) {
+			this.selectDefaultAccount();
+			await this.saveCurrent();
+			return;
+		}
+
+		// The last file is gone, so there is no statement left to keep.
+		const id = this.library.activeId;
+		if (id !== '') await this.deleteEntry(id);
 	}
 
 	/** @param balance The balance after the last transaction in this statement. */
@@ -387,39 +676,127 @@ export class StatementState {
 			if (resolved === null) return;
 
 			next[merchant] = resolved;
+			this.rememberCategory(resolved);
 		}
 
 		this.categoryRules = next;
 		saveCategoryRules(next);
 	}
 
-	setRemember(remember: boolean): void {
-		this.remember = remember;
+	/**
+	 * Keep a chosen category, and put it at the head of the shortlist.
+	 *
+	 * A name the statement itself does not carry is one the reader invented, and
+	 * is kept in its own right — otherwise re-filing that merchant somewhere else
+	 * would take the category down with the rule, and it would have to be typed
+	 * again.
+	 */
+	private rememberCategory(category: string): void {
+		const recent = withRecentCategory(this.recentCategories, category);
+		this.recentCategories = recent;
+		saveRecentCategories(recent);
 
-		if (remember) {
-			this.persist();
-		} else {
-			clearKey('files');
-		}
+		const known = categoryOptions(this.transactions);
+		if (known.includes(category) || this.ownCategories.includes(category)) return;
+
+		const own = [...this.ownCategories, category];
+		this.ownCategories = own;
+		saveOwnCategories(own);
 	}
 
-	clear(): void {
+	/**
+	 * Count a forecast charge, or stop counting it.
+	 *
+	 * @param key A charge's {@link ExpectedPayment.key}.
+	 * @param counted Whether the projection should include it.
+	 */
+	setChargeCounted(key: string, counted: boolean): void {
+		// Taken out either way, then put back on the end when it is not counted:
+		// one path, and no way to list the same charge twice.
+		const rest = this.droppedCharges.filter((dropped) => dropped !== key);
+		const next = counted ? rest : [...rest, key];
+
+		this.droppedCharges = next;
+		saveDroppedCharges(next);
+	}
+
+	/**
+	 * Count every forecast charge again, forgetting every choice.
+	 *
+	 * All of them, not only the ones a page happens to be showing: a choice with
+	 * no row left to sit on is the one a reader has no other way to undo.
+	 */
+	clearDroppedCharges(): void {
+		this.droppedCharges = [];
+		saveDroppedCharges([]);
+	}
+
+	/**
+	 * Add a charge to the forecast, or replace one already added.
+	 *
+	 * Replaced by key rather than appended, so vouching for the same payee twice
+	 * — or editing a charge of the reader's own — leaves one row and not two.
+	 * Adding one also counts it again, since ticking a charge off and then adding
+	 * it back can only mean the reader has changed their mind.
+	 */
+	addCharge(charge: AddedCharge): void {
+		const key = addedKey(charge);
+		const rest = this.addedCharges.filter((added) => addedKey(added) !== key);
+
+		this.addedCharges = [...rest, charge];
+		saveAddedCharges(this.addedCharges);
+		this.setChargeCounted(key, true);
+	}
+
+	/**
+	 * Stop counting a charge.
+	 *
+	 * A payee the reader vouched for off last month's list is un-vouched rather
+	 * than struck through. The row exists only because of that tick, so taking
+	 * the tick away should put it back where it was — one of last month's offers,
+	 * ready to be ticked again — instead of leaving a struck line that only a
+	 * second, different control can undo.
+	 *
+	 * A charge they typed keeps its row and is merely uncounted: retyping one is
+	 * not one click, and the row is the only copy of what they typed.
+	 */
+	stopCounting(key: string): void {
+		const vouched = this.addedCharges.some(
+			(charge) => charge.kind === 'merchant' && addedKey(charge) === key
+		);
+
+		if (vouched) this.removeCharge(key);
+		else this.setChargeCounted(key, false);
+	}
+
+	/**
+	 * Take a charge the reader added back out of the forecast.
+	 *
+	 * Its tick goes with it: a key nothing can name again is state with nothing
+	 * left to say.
+	 */
+	removeCharge(key: string): void {
+		const rest = this.addedCharges.filter((added) => addedKey(added) !== key);
+		// Only what was actually removed gives up its tick. A key naming a charge
+		// the history found is not the reader's to remove, and quietly counting it
+		// again would undo a choice they had made about something else.
+		if (rest.length === this.addedCharges.length) return;
+
+		this.addedCharges = rest;
+		saveAddedCharges(rest);
+		this.setChargeCounted(key, true);
+	}
+
+	/** Drop the statement on screen. The history is not touched. */
+	private reset(): void {
 		this.pdfStatement = null;
 		this.csvTransactions = [];
 		this.csvIssues = [];
 		this.pdfName = '';
 		this.csvName = '';
-		this.files = {};
+		this.pdfBytes = null;
+		this.csvText = '';
 		this.error = null;
-		clearKey('files');
-	}
-
-	private persist(): void {
-		if (!this.remember) return;
-		if (saveFiles(this.files)) return;
-
-		this.remember = false;
-		this.error = 'This browser would not store these files — they stay in memory until you reload.';
 	}
 }
 
@@ -445,17 +822,7 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 	return bytes.slice().buffer as ArrayBuffer;
 }
 
-const CHUNK = 0x8000;
-
-function toBase64(bytes: Uint8Array): string {
-	// Chunked: spreading a megabyte into String.fromCharCode blows the stack.
-	const parts: string[] = [];
-	for (let offset = 0; offset < bytes.length; offset += CHUNK) {
-		parts.push(String.fromCharCode(...bytes.subarray(offset, offset + CHUNK)));
-	}
-	return btoa(parts.join(''));
-}
-
+/** Only the old local-storage scheme needed base64; the library takes bytes. */
 function toBytes(base64: string): Uint8Array {
 	const binary = atob(base64);
 	return Uint8Array.from(binary, (character) => character.charCodeAt(0));

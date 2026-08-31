@@ -2,6 +2,22 @@ import { page } from 'vitest/browser';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import AiInsightsCard from './AiInsightsCard.svelte';
+
+/**
+ * The key the build carries, stubbed rather than read.
+ *
+ * `__ANTHROPIC_API_KEY__` is substituted from `.env` at build time, and the
+ * test run is a build like any other — left alone, whether these tests see a
+ * key input at all would depend on whoever ran them having a `.env`. Both
+ * arrangements are worth testing, so both are set here.
+ */
+const build = vi.hoisted(() => ({ key: '' }));
+
+vi.mock('../ai/env.ts', () => ({
+	envApiKey: () => build.key,
+	hasEnvKey: () => build.key !== ''
+}));
+
 import { REPORT_TOOL } from '../ai/prompt.ts';
 import { buildInsights } from '../stats/insights.ts';
 import { makeTransaction, resetTransactionIds } from '../testing/transaction.ts';
@@ -33,25 +49,42 @@ const REPORT = {
 	actions: ['Set a grocery cap.']
 };
 
-function stubFetch(): void {
+const FOLLOW_UP_REPORT = {
+	headline: 'The fees are R95, all card maintenance.',
+	findings: [{ title: 'One fee line', detail: 'R95 across the month.', tone: 'neutral' as const }],
+	actions: []
+};
+
+/**
+ * Answers each call with the next report, so a conversation can be driven
+ * through more than one turn. The last one answers anything after it.
+ */
+function stubFetch(...reports: readonly object[]): void {
+	const queue = reports.length === 0 ? [REPORT] : reports;
+	let calls = 0;
+
 	vi.stubGlobal(
 		'fetch',
-		vi.fn(() =>
-			Promise.resolve(
+		vi.fn(() => {
+			const input = queue[Math.min(calls, queue.length - 1)];
+			calls += 1;
+
+			return Promise.resolve(
 				new Response(
 					JSON.stringify({
-						content: [{ type: 'tool_use', name: REPORT_TOOL.name, input: REPORT }]
+						content: [{ type: 'tool_use', id: `tu_${calls}`, name: REPORT_TOOL.name, input }]
 					}),
 					{ status: 200 }
 				)
-			)
-		)
+			);
+		})
 	);
 }
 
 afterEach(() => {
 	vi.unstubAllGlobals();
 	localStorage.clear();
+	build.key = '';
 });
 
 describe('AiInsightsCard.svelte', () => {
@@ -109,6 +142,73 @@ describe('AiInsightsCard.svelte', () => {
 			messages: { content: string }[];
 		};
 		expect(body.messages[0].content).toContain('Why was January so bad?');
+	});
+
+	it('has nothing to follow up until there is a report to follow up on', async () => {
+		render(AiInsightsCard, { insights: insights() });
+
+		expect(page.getByLabelText('Ask a follow-up').elements()).toHaveLength(0);
+	});
+
+	it('carries the conversation on, keeping what was already answered', async () => {
+		stubFetch(REPORT, FOLLOW_UP_REPORT);
+		render(AiInsightsCard, { insights: insights() });
+
+		await page.getByLabelText('Your Anthropic API key').fill('sk-ant-test');
+		await page.getByRole('button', { name: 'Read my spending' }).click();
+		await expect.element(page.getByText(REPORT.headline)).toBeInTheDocument();
+
+		await page.getByLabelText('Ask a follow-up').fill('What were the fees?');
+		await page.getByRole('button', { name: 'Ask', exact: true }).click();
+
+		// Both answers stand, in the order they were given — a follow-up adds to
+		// the thread rather than replacing what it was asked about.
+		await expect.element(page.getByText(FOLLOW_UP_REPORT.headline)).toBeInTheDocument();
+		await expect.element(page.getByText(REPORT.headline)).toBeInTheDocument();
+		await expect.element(page.getByText('What were the fees?')).toBeInTheDocument();
+
+		const body = JSON.parse((vi.mocked(fetch).mock.calls[1][1] as RequestInit).body as string) as {
+			messages: { role: string; content: unknown }[];
+		};
+		expect(body.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+		expect(body.messages[2].content).toMatchObject([
+			{ type: 'tool_result', tool_use_id: 'tu_1' },
+			{ type: 'text', text: 'What were the fees?' }
+		]);
+	});
+
+	it('empties the follow-up box, so a question is not asked twice by accident', async () => {
+		stubFetch(REPORT, FOLLOW_UP_REPORT);
+		render(AiInsightsCard, { insights: insights() });
+
+		await page.getByLabelText('Your Anthropic API key').fill('sk-ant-test');
+		await page.getByRole('button', { name: 'Read my spending' }).click();
+		await expect.element(page.getByText(REPORT.headline)).toBeInTheDocument();
+
+		await page.getByLabelText('Ask a follow-up').fill('What were the fees?');
+		await page.getByRole('button', { name: 'Ask', exact: true }).click();
+		await expect.element(page.getByText(FOLLOW_UP_REPORT.headline)).toBeInTheDocument();
+
+		await expect.element(page.getByLabelText('Ask a follow-up')).toHaveValue('');
+		await expect.element(page.getByRole('button', { name: 'Ask', exact: true })).toBeDisabled();
+	});
+
+	it('keeps the thread when a follow-up fails', async () => {
+		stubFetch();
+		render(AiInsightsCard, { insights: insights() });
+
+		await page.getByLabelText('Your Anthropic API key').fill('sk-ant-test');
+		await page.getByRole('button', { name: 'Read my spending' }).click();
+		await expect.element(page.getByText(REPORT.headline)).toBeInTheDocument();
+
+		vi.mocked(fetch).mockResolvedValueOnce(
+			new Response(JSON.stringify({ error: { message: 'slow down' } }), { status: 429 })
+		);
+		await page.getByLabelText('Ask a follow-up').fill('What were the fees?');
+		await page.getByRole('button', { name: 'Ask', exact: true }).click();
+
+		await expect.element(page.getByRole('alert')).toHaveTextContent('rate-limiting');
+		await expect.element(page.getByText(REPORT.headline)).toBeInTheDocument();
 	});
 
 	it('says so when the question changes under a report it already wrote', async () => {
@@ -177,5 +277,40 @@ describe('AiInsightsCard.svelte', () => {
 
 		await page.getByText('Keep this key in this browser').click();
 		expect(localStorage.getItem('budgy:anthropic-key')).toContain('sk-ant-test');
+	});
+
+	it('sends under the key the build carries, without asking for one', async () => {
+		build.key = 'sk-ant-from-env';
+		stubFetch();
+		render(AiInsightsCard, { insights: insights() });
+
+		await expect.element(page.getByText('Using the key this build was given')).toBeInTheDocument();
+		await expect.element(page.getByRole('button', { name: 'Read my spending' })).toBeEnabled();
+
+		await page.getByRole('button', { name: 'Read my spending' }).click();
+		await expect.element(page.getByText(REPORT.headline)).toBeInTheDocument();
+
+		const sent = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
+		expect(new Headers(sent.headers).get('x-api-key')).toBe('sk-ant-from-env');
+	});
+
+	it('neither asks for nor stores a key of the reader’s when the build has one', async () => {
+		build.key = 'sk-ant-from-env';
+		localStorage.setItem('budgy:anthropic-key', JSON.stringify('sk-ant-stored'));
+		stubFetch();
+		render(AiInsightsCard, { insights: insights() });
+
+		await expect.element(page.getByText('Using the key this build was given')).toBeInTheDocument();
+		expect(page.getByLabelText('Your Anthropic API key').elements()).toHaveLength(0);
+		expect(page.getByText('Keep this key in this browser').elements()).toHaveLength(0);
+
+		// The key that was configured wins, and the one in this browser is left
+		// exactly as it was found — not read over, not written to.
+		await page.getByRole('button', { name: 'Read my spending' }).click();
+		await expect.element(page.getByText(REPORT.headline)).toBeInTheDocument();
+
+		const sent = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
+		expect(new Headers(sent.headers).get('x-api-key')).toBe('sk-ant-from-env');
+		expect(localStorage.getItem('budgy:anthropic-key')).toBe(JSON.stringify('sk-ant-stored'));
 	});
 });
