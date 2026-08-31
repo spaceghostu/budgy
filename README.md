@@ -299,9 +299,10 @@ bun run desktop:dist   # an installer for the platform you are on
 ```
 
 Nothing about the app changes by being run this way — same parsing, same charts,
-same "nothing leaves the machine". The shell in `electron/` is shell only: no
-application logic, no preload, no IPC. The window is handed the web platform and
-the built bundle, and that is all it has.
+same "nothing leaves the machine", with the one exception described under
+[Updates](#updates) below. The shell in `electron/` is shell only: no application
+logic, no preload, no IPC. The window is handed the web platform and the built
+bundle, and that is all it has.
 
 The bundle is served to it over `app://budgy` rather than `file://`. Chromium gives
 a `file://` page an opaque origin, and an opaque origin has no IndexedDB — the window
@@ -315,13 +316,45 @@ the bundle at build time, and an installer is a bundle that travels. Build the o
 you hand to other people from a tree without one, and let them enter their own.
 
 Building an installer for another platform needs that platform's toolchain: a Windows
-installer is built on Windows, or under Wine.
+installer is built on Windows, or under Wine. Which is why the installers that get
+handed out are built by [GitHub Actions](.github/workflows/release.yml) instead:
+pushing a `v*` tag builds Windows and Linux from the one command, and a CI checkout
+has no `.env`, so an installer built there cannot carry a key that was never there.
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+### Updates
+
+The desktop app checks GitHub for a newer release when it starts, and says what it
+found on a card at the foot of the page — which also carries a **Check for updates**
+button for asking again.
+
+This is the one thing the app does over the network without being asked, so it is
+worth being exact about. A check is a GET of the release list for a public
+repository. It carries no statement, no figure, no key and nothing identifying, and
+it fetches nothing: an update that is found is _offered_. The download is the better
+part of a hundred megabytes and starts only when you press the button, and the
+update is installed only when you quit. A failure is a line on the card rather than
+a dialog — an app that cannot reach GitHub still reads statements perfectly well.
+
+The window asks the shell about all this the same way it asks for everything else:
+an ordinary same-origin `fetch` of a path under `app://budgy/-/`, answered by the
+protocol handler that already serves the bundle. There is still no preload, nothing
+on `window` and no IPC, so the bundle remains a page a browser could run unchanged —
+on the web the card is not rendered and no request is made.
+
+macOS is not covered. An app that updates itself has to be signed for macOS to
+launch the replacement, and there is no certificate here.
 
 ## Privacy
 
 Files are read with the File API and analysed in memory. Nothing is sent anywhere
 unless you ask Claude for a read, which sends the aggregate payload described above
-and nothing else.
+and nothing else. The desktop app additionally asks GitHub whether there is a newer
+release when it starts — a request that carries nothing about you or your statements,
+and is described under [Updates](#updates).
 
 Every statement you open is kept in this browser's IndexedDB, on this device only,
 so that a reload does not lose it and a year of exports builds into a history. That
