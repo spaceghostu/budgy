@@ -154,6 +154,23 @@ function isPhase(value: string): value is UpdatePhase {
 	return PHASES.includes(value);
 }
 
+/**
+ * Whether a phase is one the shell is still moving through.
+ *
+ * The two transient phases are the ones nothing in the window can resolve: the
+ * shell is mid-request, and the state it settles on arrives without the window
+ * asking again. Anything reading a state on a timer has to know which those
+ * are, or it stops re-reading and shows a step of the process as if it were the
+ * result — a card that says "Checking…" forever because the answer landed a
+ * moment after it last looked.
+ *
+ * `idle` is deliberately not one of them: it means nothing has been asked, so
+ * there is nothing on its way and nothing to wait for.
+ */
+export function isSettling(phase: UpdatePhase): boolean {
+	return phase === 'checking' || phase === 'downloading';
+}
+
 /** What the shell says right now, without asking it to do anything. */
 export function updateStatus(): Promise<UpdateState> {
 	return ask('/status', 'GET');

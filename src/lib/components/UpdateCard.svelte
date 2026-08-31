@@ -9,6 +9,7 @@
 		downloadUpdate,
 		installUpdate,
 		isDesktop,
+		isSettling,
 		updateStatus,
 		type UpdateState
 	} from '../desktop/update.ts';
@@ -30,7 +31,7 @@
 	/** True while a request the reader started is in flight. */
 	let busy = $state(false);
 
-	/** How often to re-read the shell's state while a download is running. */
+	/** How often to re-read the shell's state while the shell is still moving. */
 	const POLL_MS = 700;
 
 	onMount(() => {
@@ -41,12 +42,18 @@
 		// so opening the app does not start a second one.
 		void updateStatus().then((next) => (update = next));
 
-		// A download reports progress to the shell, and the shell is the only
-		// thing that knows how far it has got. Polled rather than streamed: an
-		// interval that reads one small JSON object is less machinery than a
-		// socket, and this is a progress bar, not a trade feed.
+		// The shell moves on its own — a check resolves, a download reports
+		// progress — and it is the only thing that knows it has. Polled rather
+		// than streamed: an interval that reads one small JSON object is less
+		// machinery than a socket, and this is a progress bar, not a trade feed.
+		//
+		// Both transient phases are read, not only the download. The launch check
+		// is already running when this card mounts, so the first read above lands
+		// on `checking` far more often than not; an interval that woke for
+		// downloads alone would leave that first answer on screen for good, with
+		// the button that would refresh it disabled for being mid-check.
 		const timer = setInterval(() => {
-			if (update?.phase !== 'downloading') return;
+			if (update === null || !isSettling(update.phase)) return;
 			void updateStatus().then((next) => (update = next));
 		}, POLL_MS);
 
