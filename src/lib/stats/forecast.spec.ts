@@ -91,6 +91,29 @@ describe('buildForecast', () => {
 		expect(forecast.monthsOfHistory).toBe(2);
 	});
 
+	it('leaves the everyday channel out when the reader asks for the named charges alone', () => {
+		const forecast = buildForecast(statement(), { metric: 'out', everyday: false });
+
+		expect(forecast.everyday).toBe(0);
+		// The gym alone, on top of what is banked — nothing spread over the days.
+		expect(forecast.committed).toBe(500);
+		expect(forecast.projected).toBe(650);
+		expect(forecast.projected).toBe(forecast.actual + forecast.committed);
+	});
+
+	it('steps a named-charges-only line only on the days a charge lands', () => {
+		const forecast = buildForecast(statement(), { metric: 'out', everyday: false });
+
+		// Flat from the last banked day right up to the gym on the 20th.
+		expect(forecast.points[9].total).toBe(150);
+		expect(forecast.points[18].total).toBe(150);
+		expect(forecast.points[19].total).toBe(650);
+		expect(forecast.points.at(-1)?.total).toBe(650);
+		// And no band: there is no everyday spending left to be uncertain about.
+		expect(forecast.points.at(-1)?.low).toBe(650);
+		expect(forecast.points.at(-1)?.high).toBe(650);
+	});
+
 	it('counts a charge that already went off this month once, not twice', () => {
 		// The gym is banked in the actuals, so it is no longer expected — and its
 		// past occurrences must still stay out of the everyday figure, or the same

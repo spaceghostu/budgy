@@ -26,8 +26,19 @@
 	let learnFrom = $state<ForecastWindow>(DEFAULT_WINDOW);
 	/** Which past month the offers are read from. Blank means the last one. */
 	let offerFrom = $state('');
+	/**
+	 * Whether the page counts the everyday channel at all.
+	 *
+	 * Not only what the line draws: the tiles, the headline and the shortfall
+	 * alarm all read it too, so the page says one thing at a time. Turned off,
+	 * every figure on it is answering the narrower question — what the named
+	 * charges alone do to the balance — and the page has to be read that way.
+	 */
+	let showEveryday = $state(true);
 
 	/**
+	 * The whole month, everyday spending and all.
+	 *
 	 * Built from the account's whole history rather than the period-filtered
 	 * slice: a forecast is learned from the months either side of the one it is
 	 * about, so it cannot be scoped to that one month. The period row is hidden
@@ -36,7 +47,7 @@
 	 * Always net. This page draws a balance, and there is no money-out-only
 	 * reading of what is left in an account.
 	 */
-	const forecast = $derived(
+	const whole = $derived(
 		buildForecast(statement.accountTransactions, {
 			metric: 'net',
 			window: learnFrom,
@@ -48,8 +59,53 @@
 	);
 
 	/**
-	 * The line, the tiles and the list all read from this one call, so they
-	 * cannot come to different conclusions about the same month.
+	 * Whether there is an everyday channel to drop, asked of the whole month
+	 * rather than of the projection on screen.
+	 *
+	 * It has to be asked of {@link whole}, or the control would delete itself
+	 * the moment it was used: once the channel is off the projection's own
+	 * everyday figure is zero, and a guard reading that would decide there was
+	 * never anything to switch and strand the reader on the narrow view with no
+	 * way back.
+	 */
+	const hasEveryday = $derived(whole.everyday !== 0);
+
+	/**
+	 * The setting as the page actually reads it.
+	 *
+	 * Falls back to on wherever there is no channel to switch, so a reader who
+	 * turned it off and then moved to an account with no everyday spending is
+	 * not left on the narrow view with the control that would undo it no longer
+	 * on the screen.
+	 */
+	const everydayOn = $derived(showEveryday || !hasEveryday);
+
+	/**
+	 * The month as the page is being asked to read it.
+	 *
+	 * The narrow reading is rebuilt rather than subtracted from the whole one:
+	 * the line, the band, the closing figure and every tile come off the same
+	 * projection, and figures computed one way beside a line drawn the other is
+	 * a page that argues with itself.
+	 */
+	const forecast = $derived(
+		everydayOn
+			? whole
+			: buildForecast(statement.accountTransactions, {
+					metric: 'net',
+					window: learnFrom,
+					excluded: statement.droppedCharges,
+					added: statement.addedCharges,
+					candidateMonth: offerFrom,
+					monthStart: statement.monthStart,
+					everyday: false
+				})
+	);
+
+	/**
+	 * The line, the tiles, the headline, the alarm and the list all read from
+	 * this one call, so they cannot come to different conclusions about the same
+	 * month — including about whether the everyday spending is in it.
 	 */
 	const runway = $derived(
 		buildRunway(forecast, {
@@ -101,11 +157,40 @@
 		if (relative) {
 			return `${formatCount(runway.daysLeft, 'day')} to payday on ${formatDate(runway.payday)}. Set your current balance on the overview to read this line as money rather than as change.`;
 		}
+		// Both money claims below say which figures they are made on. A reader who
+		// has narrowed the page to the named charges is being told less than the
+		// month knows, and "nothing runs out" is the reading that would hurt them
+		// to take at face value.
 		if (shortfall !== null) {
-			return `On this month's figures the money runs out on ${formatDate(shortfall.date)}, ${formatCount(daysUntil(shortfall.date), 'day')} before payday.`;
+			return everydayOn
+				? `On this month's figures the money runs out on ${formatDate(shortfall.date)}, ${formatCount(daysUntil(shortfall.date), 'day')} before payday.`
+				: `On the named charges alone the money runs out on ${formatDate(shortfall.date)}, ${formatCount(daysUntil(shortfall.date), 'day')} before payday — before anything is spent on the everyday.`;
 		}
 
-		return `${formatCount(runway.daysLeft, 'day')} to payday on ${formatDate(runway.payday)}, with ${formatCurrency(runway.lowest?.balance ?? 0)} expected at the thinnest.`;
+		return everydayOn
+			? `${formatCount(runway.daysLeft, 'day')} to payday on ${formatDate(runway.payday)}, with ${formatCurrency(runway.lowest?.balance ?? 0)} expected at the thinnest.`
+			: `${formatCount(runway.daysLeft, 'day')} to payday on ${formatDate(runway.payday)}, with ${formatCurrency(runway.lowest?.balance ?? 0)} at the thinnest on the named charges alone — the everyday spending is not counted.`;
+	});
+
+	/**
+	 * What the "still to leave" figure is made of.
+	 *
+	 * Names the everyday channel only where there is one in the figure: with it
+	 * switched off the number is the named charges and nothing else, and "R0.00
+	 * of everyday spending" would assert exactly the wrong thing.
+	 */
+	const stillToLeaveHint = $derived.by(() => {
+		const named = runway.payments.filter((payment) => payment.flow === 'expense').length;
+
+		if (!everydayOn) {
+			return named === 0
+				? 'Nothing named still to leave — everyday spending not counted'
+				: `${formatCount(named, 'named charge')} — everyday spending not counted`;
+		}
+
+		return named === 0
+			? `${formatCurrency(runway.everyday)} of everyday spending`
+			: `${formatCount(named, 'named charge')}, plus ${formatCurrency(runway.everyday)} everyday`;
 	});
 
 	const subtitle = $derived(
@@ -172,9 +257,7 @@
 		<StatTile
 			label="Still to leave"
 			value={formatCurrency(runway.committedOut + runway.everyday)}
-			hint={runway.payments.length === 0
-				? `${formatCurrency(runway.everyday)} of everyday spending`
-				: `${formatCount(runway.payments.filter((payment) => payment.flow === 'expense').length, 'named charge')}, plus ${formatCurrency(runway.everyday)} everyday`}
+			hint={stillToLeaveHint}
 		/>
 		<StatTile
 			label="Lowest before payday"
@@ -221,6 +304,33 @@
 								Last {option} months
 							</ToggleGroupItem>
 						{/each}
+					</ToggleGroup>
+				</div>
+			{/if}
+
+			{#if hasEveryday}
+				<!-- The everyday channel is what slopes the line down on every day
+				     of the week. Dropping it leaves a line that only moves where a
+				     charge lands — a different and narrower question, which the
+				     tiles and the headline above answer too rather than going on
+				     reading a month the chart is no longer drawing. -->
+				<div class="flex min-w-0 flex-col gap-1.5">
+					<span id="forecast-shows" class="text-xs text-muted-foreground">Show</span>
+					<ToggleGroup
+						type="single"
+						variant="outline"
+						size="sm"
+						aria-labelledby="forecast-shows"
+						value={everydayOn ? 'all' : 'named'}
+						onValueChange={(next) => {
+							// Something is always drawn, so the group cannot be emptied.
+							if (next) showEveryday = next === 'all';
+						}}
+					>
+						<ToggleGroupItem value="all" class="text-[13px]">Everything</ToggleGroupItem>
+						<ToggleGroupItem value="named" class="text-[13px]">
+							Expected payments only
+						</ToggleGroupItem>
 					</ToggleGroup>
 				</div>
 			{/if}

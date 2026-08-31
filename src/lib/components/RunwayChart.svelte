@@ -138,6 +138,12 @@
 			: ''
 	);
 
+	/**
+	 * True when the line carries only the named charges — either because the
+	 * reader asked for that, or because there is nothing else to carry.
+	 */
+	const namedOnly = $derived(runway.everyday === 0);
+
 	/** What the line is, in one sentence under it. */
 	const note = $derived.by(() => {
 		if (runway.isComplete) {
@@ -146,9 +152,22 @@
 		if (runway.monthsOfHistory === 0) {
 			return 'There is no complete month behind this one yet, so only the named charges move the line.';
 		}
+		// Said plainly rather than left to be noticed: a flat line between two
+		// charges is exactly what a reader would otherwise read as "nothing is
+		// spent that week", which is the one thing it does not mean.
+		if (namedOnly) {
+			return 'The line is carrying the expected payments alone — it steps only on the days a named charge lands, and nothing on it allows for the everyday spending in between.';
+		}
 
 		return `The line is arithmetic, not a promise: today’s balance, less the charges below on the days they usually land, less what the rest of a month usually costs spread over the days left — learned from ${formatCount(runway.monthsOfHistory, 'complete month')}.`;
 	});
+
+	/** The same distinction, for a reader who has the line read out to them. */
+	const description = $derived(
+		namedOnly
+			? 'The balance projected from today to payday, stepping down on each expected payment and carrying no everyday spending. Switch to the table view for the underlying figures.'
+			: 'The balance projected from today to payday, stepping down on each expected payment. Switch to the table view for the underlying figures.'
+	);
 
 	function toPixels(day: RunwayDay): Point {
 		return { x: x(day.day), y: y(day.balance) };
@@ -235,12 +254,7 @@
 		<p class="empty">No transactions to project from.</p>
 	{:else}
 		<div class="plot-wrap">
-			<svg
-				{width}
-				height={HEIGHT}
-				role="img"
-				aria-label="The balance projected from today to payday, stepping down on each expected payment. Switch to the table view for the underlying figures."
-			>
+			<svg {width} height={HEIGHT} role="img" aria-label={description}>
 				<g transform="translate({MARGIN.left},{MARGIN.top})">
 					{#each yTicks as tick (tick)}
 						<line class="grid" x1="0" x2={plotWidth} y1={y(tick)} y2={y(tick)} />

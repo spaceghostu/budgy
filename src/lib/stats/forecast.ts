@@ -232,7 +232,13 @@ export interface Forecast {
 	 * on a net forecast a salary lifts it and a debit order pulls it down.
 	 */
 	readonly committed: number;
-	/** What everything else is expected to add, on the same terms. */
+	/**
+	 * What everything else is expected to add, on the same terms.
+	 *
+	 * Zero when the reader has asked for the named charges alone — see
+	 * {@link ForecastOptions.everyday} — which is what tells a page drawing this
+	 * that the line it has is narrower than the month.
+	 */
 	readonly everyday: number;
 	/** Complete past cycles the projection was learned from. */
 	readonly monthsOfHistory: number;
@@ -328,6 +334,18 @@ export interface ForecastOptions {
 	readonly candidateMonth?: string;
 	/** Day of the month a cycle opens on. See {@link cycleOf}. */
 	readonly monthStart?: number;
+	/**
+	 * Whether to project the everyday channel. Defaults to `true`.
+	 *
+	 * The everyday figure is the honest part of the projection and the part a
+	 * reader can least argue with, which is exactly why it is sometimes in the
+	 * way: it slopes the line down on every single day, and a reader asking
+	 * "what is actually *booked* between now and payday" cannot see the named
+	 * charges for it. Turned off, the line moves only where a charge lands, and
+	 * {@link Forecast.everyday} is zero — the month is not cheaper, the question
+	 * is narrower, and the page has to say so.
+	 */
+	readonly everyday?: boolean;
 }
 
 /** A payee the statement knows, and what it has been taking. */
@@ -485,17 +503,21 @@ export function buildForecast(
 		context,
 		position
 	);
-	const tails = isComplete
-		? []
-		: cycles.map((cycle) =>
-				tailTotal(history, {
-					cycle,
-					start,
-					after: elapsedDays,
-					metric,
-					skip: isCommitted
-				})
-			);
+	// No tails means no everyday channel: the median and the edges of an empty
+	// series are zero, so the line, the band and the closing figure all fall
+	// back to the committed charges alone without a second path through here.
+	const tails =
+		isComplete || options.everyday === false
+			? []
+			: cycles.map((cycle) =>
+					tailTotal(history, {
+						cycle,
+						start,
+						after: elapsedDays,
+						metric,
+						skip: isCommitted
+					})
+				);
 
 	const actual = sum(inCycle.map((transaction) => flowAmount(transaction, metric)));
 	const committed = sum(counted(expected).map((payment) => paymentAmount(payment, metric)));
