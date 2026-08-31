@@ -1,0 +1,76 @@
+# Building the installers, and publishing them as a GitHub release.
+#
+# Runs on a tag, because a release is a decision rather than a consequence of
+# pushing: `git tag v0.1.0 && git push origin v0.1.0` is the whole ceremony, and
+# nothing is published until one is pushed.
+#
+# It exists for two reasons beyond convenience. The first is that a Windows
+# installer cannot be built anywhere but Windows without Wine, so the matrix
+# below is the only way to produce both from one machine. The second is the
+# safer one: a CI checkout has no `.env`, and `vite.config.ts` bakes
+# `ANTHROPIC_API_KEY` into the bundle when there is one. An installer built here
+# cannot carry a key that was never present — which is a guarantee no local
+# build can make, and the reason these are the installers to hand out.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Buildable without publishing, to check the packaging itself still works.
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      # Every platform's installer is built, even after one fails: a Windows
+      # failure should not also cost the Linux build that was going to work.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: --win
+          - os: ubuntu-latest
+            platform: --linux
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      # electron-builder publishes the installers to the release itself.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Check
+        run: |
+          bun run lint
+          bun run check
+          bun run test
+
+      - name: Build the bundle
+        run: bun run build
+
+      # `--publish always` on a tag uploads to the release for that tag,
+      # creating it as a draft if it does not exist yet. On a manual run there is
+      # no tag, so nothing is published and the job only proves it can build.
+      - name: Package
+        run: bunx electron-builder ${{ matrix.platform }} --publish ${{ github.ref_type == 'tag' && 'always' || 'never' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: budgy-${{ matrix.os }}
+          # The installers only. `*-unpacked/` is the same app again, loose, and
+          # an order of magnitude more to upload for nothing.
+          path: |
+            dist-desktop/*.exe
+            dist-desktop/*.AppImage
+            dist-desktop/*.yml
+          if-no-files-found: error

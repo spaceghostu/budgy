@@ -9,6 +9,7 @@
 	import MonthStartPicker from '$lib/components/MonthStartPicker.svelte';
 	import SiteNav from '$lib/components/SiteNav.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import UpdateCard from '$lib/components/UpdateCard.svelte';
 	import { formatCount } from '$lib/format.js';
 	import { provideStatement } from '$lib/state/context.js';
 
@@ -119,4 +120,9 @@
 	{/if}
 
 	{@render children()}
+
+	<!-- Below the page rather than in the header: which version is installed is
+	     worth being able to find, and worth nothing at all until the reader goes
+	     looking. Renders only in the desktop app. -->
+	<UpdateCard />
 </div>

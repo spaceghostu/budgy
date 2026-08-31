@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CONTENT_SECURITY_POLICY, assetCandidates, contentType } from './paths.js';
+import { CONTENT_SECURITY_POLICY, assetCandidates, contentType, shellRoute } from './paths.js';
 
 describe('assetCandidates', () => {
 	it('answers the root with the prerendered index', () => {
@@ -84,5 +84,46 @@ describe('CONTENT_SECURITY_POLICY', () => {
 		expect(CONTENT_SECURITY_POLICY).toContain("object-src 'none'");
 		expect(CONTENT_SECURITY_POLICY).toContain("base-uri 'none'");
 		expect(CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
+	});
+});
+
+describe('shellRoute', () => {
+	it('names the endpoints the window asks the shell for', () => {
+		expect(shellRoute('/-/update/status')).toBe('update/status');
+		expect(shellRoute('/-/update/check')).toBe('update/check');
+		expect(shellRoute('/-/update/download')).toBe('update/download');
+		expect(shellRoute('/-/update/install')).toBe('update/install');
+	});
+
+	it('leaves an ordinary page to the bundle', () => {
+		expect(shellRoute('/')).toBeNull();
+		expect(shellRoute('/forecast')).toBeNull();
+		expect(shellRoute('/_app/immutable/entry/app.js')).toBeNull();
+	});
+
+	it('refuses an endpoint it does not have, rather than guessing', () => {
+		expect(shellRoute('/-/update/uninstall')).toBeNull();
+		expect(shellRoute('/-/quit')).toBeNull();
+		expect(shellRoute('/-')).toBeNull();
+	});
+
+	it('reads an escaped prefix as the prefix', () => {
+		// %2d is `-`. A route that only matched the literal would let the same
+		// request through as a page and serve index.html to a fetch for JSON.
+		expect(shellRoute('/%2d/update/status')).toBe('update/status');
+	});
+
+	it('says nothing for a path that is not decodable', () => {
+		expect(shellRoute('/%ZZ/update/status')).toBeNull();
+	});
+});
+
+describe('the shell prefix is never a file', () => {
+	it('offers no candidate under it, so a bad endpoint cannot become the app', () => {
+		// Without this an unknown endpoint would fall through to index.html, and
+		// a fetch expecting JSON would be handed the app's own HTML with a 200.
+		expect(assetCandidates('/-/update/status')).toEqual([]);
+		expect(assetCandidates('/-/anything')).toEqual([]);
+		expect(assetCandidates('/-')).toEqual([]);
 	});
 });

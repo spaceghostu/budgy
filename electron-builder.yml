@@ -6,11 +6,6 @@
 # scratch space. The directory it points at need not exist, and does not: it is
 # where an `icon.png` would go when there is an app icon to put there. Until
 # then the builds carry Electron's own.
-#
-# `files` is the whole app: the shell in `electron/`, the bundle in `build/`,
-# and the manifest that names the entry point. `node_modules` is deliberately
-# not among them — Vite has already bundled papaparse and pdf.js into `build/`,
-# so shipping the packages again would be the same code twice.
 appId: za.co.developerhut.budgy
 productName: Budgy
 copyright: Budgy
@@ -19,16 +14,35 @@ directories:
   buildResources: electron/resources
   output: dist-desktop
 
+# `files` is the whole app: the shell in `electron/`, the bundle in `build/`, and
+# the manifest that names the entry point.
+#
+# `node_modules` is deliberately not listed. electron-builder includes production
+# dependencies on its own — which is exactly what is wanted here, because
+# `electron-updater` is imported by `electron/updater.js` at run time and has to
+# be in the package. It is the only entry in `dependencies` that does; papaparse
+# and pdf.js are bundled into `build/` by Vite and are pulled in as well, which
+# is a few megabytes of duplication in exchange for a rule nobody has to
+# hand-maintain as the updater's own dependencies change.
 files:
   - package.json
   - electron/**/*
   - '!electron/**/*.spec.js'
   - build/**/*
-  - '!node_modules'
-
-# Statements are read in the window and never sent anywhere; there is no update
-# server to point at, and an unconfigured one is worse than none.
-publish: null
+# Releases are published to, and read from, the GitHub repository below.
+#
+# This is what `electron-updater` reads at run time as well: the provider block
+# is written into `app-update.yml` inside the packaged app, which is how an
+# installed copy knows where to look. Both halves come from here, so they cannot
+# disagree about which repository an update comes from.
+#
+# It works unauthenticated because the repository is public. A private one would
+# need a token inside the shipped app, readable by anyone holding the installer,
+# which is not a trade this app makes.
+publish:
+  provider: github
+  owner: spaceghostu
+  repo: budgy
 
 linux:
   target: AppImage

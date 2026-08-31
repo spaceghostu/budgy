@@ -65,6 +65,50 @@ const hasExtension = (/** @type {string} */ relative) =>
 	/\.[^./]+$/.test(relative.slice(relative.lastIndexOf('/') + 1));
 
 /**
+ * The path prefix reserved for the shell, rather than for the bundle.
+ *
+ * `adapter-static` names its files after routes, and a route is a word — so a
+ * segment that could never be one is what keeps the shell's own endpoints from
+ * ever colliding with a page. `-` is not a legal route name here and never
+ * will be, which is the point of choosing it.
+ */
+const SHELL_PREFIX = '-';
+
+/**
+ * The shell endpoint a request names, or `null` where it names a page.
+ *
+ * This is how the window talks to the main process. There is no preload and no
+ * IPC: the renderer makes an ordinary same-origin `fetch`, and the protocol
+ * handler that already answers every other request answers these too. The
+ * renderer is still a plain web page with the web platform and nothing else —
+ * which is the whole security posture of this shell, and worth keeping while
+ * adding an update button to it.
+ *
+ * Only the names below are answered. An unknown one under the same prefix is
+ * `null`, and so 404s as a missing page would, rather than falling through to
+ * `index.html` and handing a script the app's own HTML where it asked for JSON.
+ *
+ * @param {string} pathname The URL's path, `/` first.
+ * @returns {'update/status' | 'update/check' | 'update/download' | 'update/install' | null}
+ */
+export function shellRoute(pathname) {
+	const decoded = decode(pathname);
+	if (decoded === undefined) return null;
+
+	const segments = decoded.split('/').filter((segment) => segment !== '');
+	if (segments[0] !== SHELL_PREFIX) return null;
+
+	const name = segments.slice(1).join('/');
+
+	return name === 'update/status' ||
+		name === 'update/check' ||
+		name === 'update/download' ||
+		name === 'update/install'
+		? name
+		: null;
+}
+
+/**
  * The files to try, in order, for a request path — first one that exists wins.
  *
  * A path that already names a file gets exactly one candidate: an asset that is
@@ -83,6 +127,9 @@ export function assetCandidates(pathname) {
 
 	const segments = decoded.split('/').filter((segment) => segment !== '');
 	if (segments.some(isUnsafe)) return [];
+	// The shell's own endpoints are not files, and must not fall back to
+	// `index.html` when one is misspelled — see {@link shellRoute}.
+	if (segments[0] === SHELL_PREFIX) return [];
 
 	const relative = segments.join('/');
 	if (relative === '') return ['index.html'];

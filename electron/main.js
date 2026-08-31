@@ -9,12 +9,26 @@
  * Everything here is shell. There is no application logic in the main process
  * and no IPC, so there is no preload: the renderer is given nothing beyond a
  * normal web page, and the bundle is unchanged by being run this way.
+ *
+ * The update card is the one thing the window asks the shell for, and it asks
+ * the same way it asks for everything else — a same-origin `fetch` of a
+ * reserved path, answered by the protocol handler that already serves the
+ * bundle. See `protocol.js`. That keeps the posture above intact while the app
+ * gains a button: still no preload, still nothing on `window`, still a page a
+ * browser could run unchanged.
  */
 
 import path from 'node:path';
 import { BrowserWindow, app, nativeTheme, net, session, shell } from 'electron';
 import { bridgeCors } from './cors.js';
 import { APP_ORIGIN, APP_URL, registerScheme, serveBuild } from './protocol.js';
+import {
+	checkForUpdates,
+	downloadUpdate,
+	installUpdate,
+	startUpdates,
+	updateStatus
+} from './updater.js';
 
 /**
  * The dev URL as Chromium will spell it — `http://localhost:5173/`, slash and all.
@@ -168,9 +182,24 @@ else {
 	});
 
 	app.whenReady().then(() => {
-		serveBuild(BUILD_DIR);
+		serveBuild(BUILD_DIR, {
+			status: updateStatus,
+			check: checkForUpdates,
+			download: downloadUpdate,
+			install: installUpdate
+		});
 		bridgeCors(session.defaultSession, APP_ORIGIN);
+
+		startUpdates({ isPackaged: app.isPackaged, version: app.getVersion() });
 		createWindow();
+
+		// The one call this app makes without being asked. It is a GET of the
+		// release list for a public repository — no statement, no figure, no key
+		// and nothing identifying goes with it — and it fetches nothing: an
+		// update found here is offered, and downloaded only once the reader says
+		// so. A failure is a phase on the card, not a dialog: an app that cannot
+		// reach GitHub is still an app that reads statements perfectly well.
+		void checkForUpdates();
 
 		// macOS keeps the app running with no windows; clicking the dock icon is
 		// how a window comes back.
