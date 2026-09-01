@@ -1,5 +1,6 @@
 <script lang="ts">
 	import AddCharge from '$lib/components/AddCharge.svelte';
+	import AiForecastCard from '$lib/components/AiForecastCard.svelte';
 	import CategoryOutlookList from '$lib/components/CategoryOutlookList.svelte';
 	import CategoryOutlookTable from '$lib/components/CategoryOutlookTable.svelte';
 	import ChartCard from '$lib/components/ChartCard.svelte';
@@ -404,4 +405,17 @@
 			/>
 		{/snippet}
 	</ChartCard>
+
+	<!-- Last on the page, and only while there is a month left to plan: a
+	     finished month has nothing to save, and a card offering to send figures
+	     about it would be spending a call on the reader's key for nothing. -->
+	{#if !runway.isComplete}
+		<AiForecastCard
+			{runway}
+			window={learnFrom}
+			monthStart={statement.monthStart}
+			isRelative={relative}
+			everydayCounted={everydayOn}
+		/>
+	{/if}
 {/if}

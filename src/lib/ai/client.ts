@@ -43,6 +43,25 @@ export class AiRequestError extends Error {
  */
 const TOOL_RESULT = 'Shown to the reader.';
 
+/**
+ * What is being asked, and the shape it has to be answered in.
+ *
+ * The two cards ask different questions of different figures — what a period
+ * that has happened came to, and how to get through one that has not — so the
+ * instructions and the tool travel with the request rather than being fixed
+ * here. Everything else about the call is the same, which is why there is one
+ * client and not two.
+ */
+export interface AiBrief {
+	/** The system prompt. Fixed text: it never varies with the statement. */
+	readonly system: string;
+	/** The forced tool. Its `name` is what `tool_choice` names. */
+	readonly tool: { readonly name: string; readonly [key: string]: unknown };
+}
+
+/** Reading the period, which is what this client did before it did anything else. */
+export const SPENDING_BRIEF: AiBrief = { system: SYSTEM_PROMPT, tool: REPORT_TOOL };
+
 /** A reply from Claude, kept whole so the conversation can continue from it. */
 export interface ReportReply {
 	/** The part the card draws. */
@@ -90,6 +109,14 @@ export interface SpendingRequest {
 	 */
 	readonly question?: string;
 	/**
+	 * What is being asked and in what shape. Defaults to {@link SPENDING_BRIEF}.
+	 *
+	 * Travels with the request rather than with the conversation so that a
+	 * follow-up is answered under the same instructions the opening was, whichever
+	 * card is asking.
+	 */
+	readonly brief?: AiBrief;
+	/**
 	 * Aborts the request. An abort is rethrown as-is rather than wrapped, so the
 	 * caller can tell "the reader cancelled" from "it failed".
 	 */
@@ -113,7 +140,7 @@ export async function requestSpendingReport(request: SpendingRequest): Promise<R
 	const response = await send(request, key);
 	if (!response.ok) throw new AiRequestError(await describeFailure(response));
 
-	const reply = toReply(await readBody(response));
+	const reply = toReply(await readBody(response), (request.brief ?? SPENDING_BRIEF).tool.name);
 	if (reply === null) {
 		throw new AiRequestError('Claude replied in a shape this app could not read. Try again.');
 	}
@@ -170,6 +197,8 @@ async function readBody(response: Response): Promise<unknown> {
 }
 
 async function send(request: SpendingRequest, key: string): Promise<Response> {
+	const brief = request.brief ?? SPENDING_BRIEF;
+
 	try {
 		return await fetch(API_URL, {
 			method: 'POST',
@@ -183,11 +212,11 @@ async function send(request: SpendingRequest, key: string): Promise<Response> {
 			body: JSON.stringify({
 				model: MODEL,
 				max_tokens: MAX_TOKENS,
-				system: SYSTEM_PROMPT,
-				tools: [REPORT_TOOL],
+				system: brief.system,
+				tools: [brief.tool],
 				// Forced, so every turn — the opening read and each follow-up — comes
 				// back as a validated object the card can draw the same way.
-				tool_choice: { type: 'tool', name: REPORT_TOOL.name },
+				tool_choice: { type: 'tool', name: brief.tool.name },
 				messages: buildMessages(request)
 			})
 		});
@@ -255,7 +284,7 @@ async function errorMessage(response: Response): Promise<string | null> {
  * All three land in front of the reader the same way, as a reply this app could
  * not read.
  */
-function toReply(body: unknown): ReportReply | null {
+function toReply(body: unknown, toolName: string): ReportReply | null {
 	const content = (body as { content?: unknown } | null)?.content;
 	if (!Array.isArray(content)) return null;
 
@@ -264,7 +293,7 @@ function toReply(body: unknown): ReportReply | null {
 			typeof item === 'object' &&
 			item !== null &&
 			(item as { type?: unknown }).type === 'tool_use' &&
-			(item as { name?: unknown }).name === REPORT_TOOL.name
+			(item as { name?: unknown }).name === toolName
 	) as { id?: unknown; input?: unknown } | undefined;
 
 	if (typeof block?.id !== 'string') return null;

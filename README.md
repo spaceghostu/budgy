@@ -2,8 +2,8 @@
 
 Pick your bank statement files and get a balance chart and spending insights back.
 Everything happens in the browser — there is no server, no upload and no account.
-The single exception is the optional **Ask Claude** card, which sends a summary of
-totals to the Anthropic API under your own key, and only when you press it.
+The single exception is the optional **Ask Claude** cards, which send a summary of
+totals to the Anthropic API under your own key, and only when you press one.
 
 It also runs as a [desktop app](#desktop-app), which is the same bundle in a window
 of its own rather than a second version of anything.
@@ -66,6 +66,10 @@ Discovery's certified layout.
   for. Last month sits under it unticked, to say which of it is coming back — and
   you can untick what is not coming, or add what is not in these files at all. See
   [Forecasting](#forecasting).
+- **A plan for getting through the month** — the same projection, read by Claude:
+  which of the charges still to come could be moved, what each category has left to
+  spend over the days remaining, and what that is worth by payday. Opt-in and under
+  your own key, like the read on **Insights**. See [Asking Claude](#asking-claude).
 - **Highlights** — runway, surplus or shortfall, what the fees cost, the heaviest day.
 - **Ask Claude** — a written read of the period, from the Anthropic API, under your own
   key. Opt-in, and the only thing here that sends anything anywhere. See
@@ -95,9 +99,9 @@ of the one it is about, so it keeps the account and drops the period:
 | `/net-worth`    | What it all comes to, across every account                                                                           |
 | `/spending`     | Where it went — month against month, what changed, category, merchant, filing; open any of them for its transactions |
 | `/recurring`    | What repeats, and the biggest single hits                                                                            |
-| `/forecast`     | How far the money goes — your balance from today to payday, and what is still expected to leave                      |
+| `/forecast`     | How far the money goes — your balance from today to payday, what is still expected to leave, and a plan for saving   |
 | `/transactions` | Every row, searchable — plus anything that could not be read                                                         |
-| `/insights`     | Ask Claude, the one thing that leaves the device                                                                     |
+| `/insights`     | Ask Claude to read the period — one of the two things that leave the device                                          |
 | `/history`      | Every statement kept here — open one, delete one, delete all                                                         |
 
 The statement lives above the routes, so moving between them does not re-read a
@@ -241,21 +245,41 @@ figures stop at.
 ## Asking Claude
 
 Every chart on the page is computed here. **Ask Claude** is the one feature that is
-not: press it and a summary of the period goes to the Anthropic API and comes back as
-a headline, a handful of findings and some suggested actions.
+not: press it and a summary goes to the Anthropic API and comes back as a headline, a
+handful of findings and some suggested actions.
 
-It sends **aggregates only** — the period, the totals, per-month flow, the top dozen
-categories and merchants, the recurring charges and the biggest expenses reduced to
-date, merchant, category and amount. Descriptions, notes, counterparties, account
-names, account numbers and times are all dropped, and a test asserts they stay
-dropped.
+There are two of these cards, asking two different questions of two different sets of
+figures:
 
-Beside it is an optional **note box**: a sentence or two saying what you want from the
-read — a question, a goal, or something the statement cannot show. "Saving for a
-deposit in June", "why was January so much worse than December", "ignore the medical
-bills, they were a one-off". It steers what Claude looks at, and if it asks a question
-the headline answers it. Whatever you type is sent word for word, so the card shows
-the whole message — figures and note together — before you send it.
+- **On Insights — what the period came to.** A read of a month that has happened:
+  what stands out in the totals, the categories and the charges that repeat. It sends
+  the period, the totals, per-month flow, the top dozen categories and merchants, the
+  recurring charges and the biggest expenses reduced to date, merchant, category and
+  amount.
+- **On Forecast — how to get through the month.** A plan for a month that has not
+  finished: what is in the account, the named charges still to come with the day each
+  lands, and what each category still has to take before payday. It answers with the
+  same three parts, where the actions are the plan itself — which charge to move, what
+  to hold a category to over the days left, and what each is worth by payday. It reads
+  the projection **as it is on screen**: the window you chose, the charges you have
+  ticked off, and the everyday spending only if the page is counting it.
+
+Both send **aggregates and named charges only**. Descriptions, notes, counterparties,
+account names, account numbers and times are all dropped, and a test on each payload
+asserts they stay dropped.
+
+The plan card knows what it cannot say. Without a running balance — no printed
+balances and none entered on the overview — it is told the balances are a shape rather
+than a level, and it talks about what the month costs and what could be saved instead
+of claiming the account runs out. It is told the same about a debit order, which
+cannot simply be skipped on the day, and about how few months it was learned from.
+
+Beside each is an optional **note box**: a sentence or two saying what you want from
+it — a question, a goal, or something the statement cannot show. "Saving for a deposit
+in June", "why was January so much worse than December", "I need to keep R3 000 back
+for tyres". It steers what Claude looks at, and if it asks a question the headline
+answers it. Whatever you type is sent word for word, so the card shows the whole
+message — figures and note together — before you send it.
 
 **The read is a conversation, not a single answer.** Under the report is a follow-up
 box: "break down those bank fees", "which of those subscriptions is the newest",
@@ -419,7 +443,7 @@ bun run lint           # prettier + eslint
 | `src/lib/parse/`         | CSV reading, PDF row assembly, the two-source merge, normalisation                            |
 | `src/lib/stats/`         | Balance series, period summary, breakdowns, month comparison, recurring detection, highlights |
 | `src/lib/charts/`        | Scales, tick selection, SVG path builders                                                     |
-| `src/lib/ai/`            | The outbound payload, the prompt, the Anthropic call, the reply's validation                  |
+| `src/lib/ai/`            | The outbound payloads, the prompts, the Anthropic call, the reply's validation                |
 | `src/lib/components/`    | Charts, tables and the UI shell                                                               |
 | `src/lib/components/ui/` | shadcn-svelte primitives, generated by its CLI                                                |
 | `src/lib/state/`         | The rune store, date-range presets, the statement library, local persistence                  |
@@ -540,17 +564,24 @@ at least 25 days apart, within 15% of the same amount. Without the span test a s
 on 31 July and another on 1 August looks monthly; without the amount test a
 supermarket looks like a subscription.
 
-**What leaves the browser is one function, plus whatever you typed.**
-`ai/payload.ts` decides every figure Anthropic sees, so the answer to "what does it
-send?" is a file you can read rather than a call site you have to find — and the note
-box passes through verbatim on top of it, which is why the card previews the assembled
-message rather than the JSON alone. Anything sent but not shown would make that
-summary a lie.
+**What leaves the browser is one function per question, plus whatever you typed.**
+`ai/payload.ts` decides every figure the period read sends and `ai/forecast-payload.ts`
+every figure the plan sends, so the answer to "what does it send?" is a file you can
+read rather than a call site you have to find — and the note box passes through
+verbatim on top of it, which is why the card previews the assembled message rather
+than the JSON alone. Anything sent but not shown would make that summary a lie.
 
-The payload is built from the same `Insights` the cards render, so the model is shown
-the period currently filtered — what is on screen and what is asked about stay the same
-thing. Because a report cannot re-derive itself when the filters move, the card says
-so, and says which of the two moved: the figures under it, or the question you asked.
+Each payload is built from the same object its page renders — `Insights` for the
+period, `Runway` for the plan — so the model is shown what is on screen, edits and
+filters included, and what is on screen and what is asked about stay the same thing.
+Because a report cannot re-derive itself when the figures move, the card says so, and
+says which of the two moved: the figures under it, or the question you asked.
+
+**One card, asked twice.** The key, the note box, the preview, the conversation, the
+follow-ups and every failure message are the same job whichever page is asking, so
+`AiReportCard.svelte` is written once and the question travels in as props: the
+instructions, the forced tool, the message builder and the wording. A second copy is
+where two sets of promises about what leaves the browser would quietly drift apart.
 
 **The reply comes back through a forced tool call.** A model asked for JSON in the
 prompt will now and then wrap it in a sentence. Given a tool and `tool_choice`, it

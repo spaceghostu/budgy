@@ -19,6 +19,7 @@ vi.mock('../ai/env.ts', () => ({
 }));
 
 import { REPORT_TOOL } from '../ai/prompt.ts';
+import { formatDate } from '../format.ts';
 import { buildInsights } from '../stats/insights.ts';
 import { makeTransaction, resetTransactionIds } from '../testing/transaction.ts';
 import type { Insights } from '../types.ts';
@@ -249,6 +250,38 @@ describe('AiInsightsCard.svelte', () => {
 
 		await expect
 			.element(page.getByText('The figures on screen have changed since', { exact: false }))
+			.toBeInTheDocument();
+	});
+
+	it('names the period it was written from, not the one now on screen', async () => {
+		stubFetch();
+		const { rerender } = render(AiInsightsCard, { insights: insights() });
+
+		await page.getByLabelText('Your Anthropic API key').fill('sk-ant-test');
+		await page.getByRole('button', { name: 'Read my spending' }).click();
+		await expect.element(page.getByText(REPORT.headline)).toBeInTheDocument();
+
+		// A different period entirely. The warning exists only once these two have
+		// parted company, so naming the new one would assert the opposite of the
+		// thing it is there to say.
+		resetTransactionIds();
+		await rerender({
+			insights: buildInsights(
+				[
+					makeTransaction({ date: '2026-03-02', amount: 8000 }),
+					makeTransaction({ date: '2026-03-28', amount: -4400 })
+				],
+				3600
+			)
+		});
+
+		await expect
+			.element(
+				page.getByText(
+					`This conversation is about ${formatDate('2026-01-05')} to ${formatDate('2026-01-09')}`,
+					{ exact: false }
+				)
+			)
 			.toBeInTheDocument();
 	});
 
