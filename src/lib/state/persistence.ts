@@ -21,7 +21,8 @@ const KEYS = {
 	ownCategories: 'budgy:own-categories',
 	recentCategories: 'budgy:recent-categories',
 	droppedCharges: 'budgy:dropped-charges',
-	addedCharges: 'budgy:added-charges'
+	addedCharges: 'budgy:added-charges',
+	bankAccounts: 'budgy:discovery-accounts'
 } as const;
 
 export type Theme = 'light' | 'dark' | 'system';
@@ -332,6 +333,34 @@ export function saveApiKey(key: string): void {
 	}
 
 	writeJson(KEYS.apiKey, key);
+}
+
+/**
+ * Discovery's own account ids, as the reader pasted them.
+ *
+ * The bank identifies accounts by opaque handles that appear nowhere in a
+ * statement it issues — not on the PDF's cover page, not in the CSV's account
+ * column — so the app has no way to work them out and the reader has to supply
+ * them once. Kept here so that is genuinely once, rather than every five-minute
+ * token.
+ *
+ * They are not a credential: on their own they open nothing, and every request
+ * carrying them still needs the reader's live session token. They are still
+ * personal — they name somebody's accounts — which is why they live in this
+ * browser and are never written into the app's own source.
+ */
+export function loadBankAccounts(): readonly string[] {
+	return readJson(KEYS.bankAccounts, isStringArray) ?? [];
+}
+
+/** @param accounts An empty list clears the stored one rather than storing nothing. */
+export function saveBankAccounts(accounts: readonly string[]): void {
+	if (accounts.length === 0) {
+		clearKey('bankAccounts');
+		return;
+	}
+
+	writeJson(KEYS.bankAccounts, accounts);
 }
 
 function isString(value: unknown): value is string {

@@ -5,10 +5,12 @@
 	import {
 		BankRequestError,
 		type DateRange,
-		fetchCertifiedStatement,
+		fetchStatementSources,
+		parseAccountIds,
 		suggestRange,
 		tokenExpiry
 	} from '$lib/bank/discovery.js';
+	import { loadBankAccounts, saveBankAccounts } from '$lib/state/persistence.js';
 	import type { StatementState } from '$lib/state/statement.svelte.js';
 
 	interface Props {
@@ -30,7 +32,21 @@
 	let token = $state('');
 	let busy = $state(false);
 	let failure = $state<string | null>(null);
-	let fetched = $state<string | null>(null);
+	let fetched = $state<readonly string[]>([]);
+	/** What did not arrive, said plainly beside what did. */
+	let shortfall = $state<readonly string[]>([]);
+
+	/**
+	 * Discovery's account ids, as pasted — kept in this browser, never in git.
+	 *
+	 * Blank is a real answer, not an unfinished one: it asks the bank for its own
+	 * default. The field exists because that default does not reach every
+	 * account — the certified statement omits at least one — and only an explicit
+	 * list is known to bring back the rest.
+	 */
+	let accountsText = $state(loadBankAccounts().join('\n'));
+	let showAccounts = $state(false);
+	const accounts = $derived(parseAccountIds(accountsText));
 
 	/** Ticks so the countdown counts. */
 	let now = $state(Date.now());
@@ -60,21 +76,44 @@
 	async function pull(): Promise<void> {
 		busy = true;
 		failure = null;
-		fetched = null;
+		fetched = [];
+		shortfall = [];
 
 		try {
-			const file = await fetchCertifiedStatement({ token, range });
-			await statement.loadFile(file);
+			// Saved before the request rather than after it, so a list that took a
+			// moment to gather survives a fetch that then fails.
+			saveBankAccounts(accounts);
+
+			const sources = await fetchStatementSources({ token, range, scope: { accounts } });
 
 			// Spent either way within minutes — there is no reason to keep it in a
 			// field where a screen-share would catch it.
 			token = '';
 
-			// `loadFile` reports a bad parse through `statement.error` rather than
-			// by throwing, so arriving here is not the same as having succeeded.
-			// Claiming otherwise would put "Loaded …" beside the error saying it
-			// was not.
-			if (statement.error === null) fetched = file.name;
+			const loaded: string[] = [];
+			// Sequentially, not in parallel: both halves land in the one
+			// `StatementState`, and `loadFile` reads `statement.error` as it goes.
+			for (const file of [sources.pdf, sources.csv]) {
+				if (file === null) continue;
+
+				await statement.loadFile(file);
+
+				// `loadFile` reports a bad parse through `statement.error` rather
+				// than by throwing, so arriving here is not the same as having
+				// succeeded. Claiming otherwise would put "Loaded …" beside the
+				// error saying it was not.
+				if (statement.error === null) loaded.push(file.name);
+			}
+
+			fetched = loaded;
+			shortfall = sources.failures;
+
+			// Nothing at all arrived: that is a failure, not a partial success, and
+			// it belongs in the alert rather than in a quiet line underneath.
+			if (loaded.length === 0 && sources.failures.length > 0) {
+				failure = sources.failures.join(' ');
+				shortfall = [];
+			}
 		} catch (error: unknown) {
 			failure =
 				error instanceof BankRequestError
@@ -89,8 +128,8 @@
 <section class="rounded-xl border bg-card p-4" aria-label="Fetch from Discovery">
 	<h2 class="text-[15px] font-semibold">Fetch from Discovery</h2>
 	<p class="mt-1 text-[13px] text-muted-foreground">
-		Pulls the certified statement for a period straight from the bank, instead of downloading it and
-		dragging it here.
+		Pulls a period straight from the bank instead of downloading it and dragging it here — both the
+		certified statement and the Smart Search export, and it says which of them arrived.
 	</p>
 
 	<div class="mt-3.5 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
@@ -135,6 +174,39 @@
 		</div>
 	</div>
 
+	<div class="mt-3">
+		<button
+			type="button"
+			class="text-xs font-semibold text-muted-foreground hover:text-foreground"
+			aria-expanded={showAccounts}
+			onclick={() => (showAccounts = !showAccounts)}
+		>
+			{showAccounts ? '▾' : '▸'} Accounts{accounts.length > 0 ? ` (${accounts.length})` : ''}
+		</button>
+
+		{#if showAccounts}
+			<div class="mt-2">
+				<Label for="{id}-accounts" class="mb-1 text-xs font-semibold text-muted-foreground">
+					Discovery account ids
+				</Label>
+				<textarea
+					id="{id}-accounts"
+					rows="4"
+					spellcheck="false"
+					class="w-full rounded-md border bg-background p-2 font-mono text-[12px]"
+					placeholder="One per line, or pasted straight out of the request."
+					disabled={busy}
+					bind:value={accountsText}></textarea>
+				<p class="mt-1 text-[12px] text-faint">
+					Kept in this browser only. Leave it blank to take whatever the bank sends by default —
+					which is not everything: the certified statement leaves at least one account out, and
+					listing the ids here is what brings the rest back. Copy them from the
+					<code class="font-mono">AccountsList</code> of a Smart Search request in devtools.
+				</p>
+			</div>
+		{/if}
+	</div>
+
 	<div class="mt-3.5 flex flex-wrap items-center gap-3">
 		<Button
 			size="sm"
@@ -162,15 +234,23 @@
 		<p class="mt-3 text-[13px] text-destructive" role="alert">{failure}</p>
 	{/if}
 
-	{#if fetched !== null}
-		<p class="mt-3 text-[13px] text-muted-foreground">Loaded {fetched}.</p>
+	{#if fetched.length > 0}
+		<p class="mt-3 text-[13px] text-muted-foreground">Loaded {fetched.join(' and ')}.</p>
+	{/if}
+
+	{#if shortfall.length > 0}
+		<div class="mt-2 text-[13px] text-amber-600 dark:text-amber-500" role="status">
+			{#each shortfall as reason (reason)}
+				<p>{reason}</p>
+			{/each}
+		</div>
 	{/if}
 
 	<p class="mt-3.5 border-t pt-3 text-[12.5px] text-faint">
 		In your logged-in Discovery tab, open devtools → Network, click any request to
 		<code class="font-mono">api.discoverybank.co.za</code>, and copy the
 		<code class="font-mono">authorization</code> header. Tokens last about five minutes, so this asks
-		for one each time rather than keeping it — it is never saved to this browser, and the statement it
-		fetches is read here the same way a dropped file is.
+		for one each time rather than keeping it — it is never saved to this browser, and whatever it fetches
+		is read here the same way a dropped file is.
 	</p>
 </section>

@@ -102,6 +102,72 @@ describe('FetchStatement.svelte', () => {
 		await expect.element(field).toHaveValue('');
 	});
 
+	it('says the Smart Search half is missing rather than reporting plain success', async () => {
+		// The PDF arrives and parses; the CSV cannot be fetched at all. The card
+		// must not settle for "Loaded …" — that silence is the bug.
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(
+				new Response(JSON.stringify({ FileData: btoa('%PDF-1.4 not really'), success: true }), {
+					status: 200
+				})
+			)
+		);
+		render(FetchStatement, { statement: new StatementState() });
+
+		await page.getByLabelText('Discovery access token').fill(tokenExpiringIn(300));
+		await page.getByRole('button', { name: 'Fetch statement' }).click();
+
+		await expect.element(page.getByText(/Smart Search export did not arrive/)).toBeInTheDocument();
+	});
+
+	it('puts it in the alert when neither half arrived', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+		render(FetchStatement, { statement: new StatementState() });
+
+		await page.getByLabelText('Discovery access token').fill(tokenExpiringIn(300));
+		await page.getByRole('button', { name: 'Fetch statement' }).click();
+
+		await expect.element(page.getByRole('alert')).toHaveTextContent(/token was rejected/);
+		await expect.element(page.getByText(/^Loaded /)).not.toBeInTheDocument();
+	});
+
+	it('sends the accounts the reader pasted, so the omitted ones are asked for', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response('a,b\n1,2', { status: 200 }));
+		vi.stubGlobal('fetch', fetchMock);
+		render(FetchStatement, { statement: new StatementState() });
+
+		await page.getByRole('button', { name: /Accounts/ }).click();
+		await page.getByLabelText('Discovery account ids').fill('ACCOUNT-ONE\nACCOUNT-TWO');
+		await page.getByLabelText('Discovery access token').fill(tokenExpiringIn(300));
+		await page.getByRole('button', { name: 'Fetch statement' }).click();
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+		const search = fetchMock.mock.calls
+			.map(([, init]) => JSON.parse((init as RequestInit).body as string))
+			.find((body) => 'AccountsList' in body);
+		expect(search.AccountsList).toEqual(['ACCOUNT-ONE', 'ACCOUNT-TWO']);
+	});
+
+	it('remembers the accounts so they are pasted once, not every token', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('a,b\n1,2', { status: 200 })));
+		const first = render(FetchStatement, { statement: new StatementState() });
+
+		await page.getByRole('button', { name: /Accounts/ }).click();
+		await page.getByLabelText('Discovery account ids').fill('ACCOUNT-ONE');
+		await page.getByLabelText('Discovery access token').fill(tokenExpiringIn(300));
+		await page.getByRole('button', { name: 'Fetch statement' }).click();
+
+		await vi.waitFor(() => expect(localStorage.getItem('budgy:discovery-accounts')).not.toBeNull());
+		first.unmount();
+
+		render(FetchStatement, { statement: new StatementState() });
+		await page.getByRole('button', { name: /Accounts/ }).click();
+
+		await expect.element(page.getByLabelText('Discovery account ids')).toHaveValue('ACCOUNT-ONE');
+	});
+
 	it('does not claim a statement loaded when it would not parse', async () => {
 		vi.stubGlobal(
 			'fetch',

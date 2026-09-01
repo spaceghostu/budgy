@@ -1,10 +1,110 @@
+/**
+ * A fetch that answers each endpoint separately, as the network would.
+ *
+ * The two halves come from different URLs, so one blanket response cannot tell
+ * the "both arrived" case from "one did" — which is the distinction every test
+ * below turns on.
+ */
+function routed(answers: { pdf?: () => Response; csv?: () => Response }) {
+	return vi.fn((url: string) => {
+		const answer = url === SMART_SEARCH_URL ? answers.csv : answers.pdf;
+		return answer === undefined
+			? Promise.resolve(new Response('', { status: 500 }))
+			: Promise.resolve(answer());
+	});
+}
+
+const CSV_TEXT = '"Value Date","Amount"\n2026-08-13,-299.00';
+
+describe('fetchStatementSources', () => {
+	it('brings back both halves on the one token', async () => {
+		const fetchMock = routed({
+			pdf: () => envelope('%PDF-1.4'),
+			csv: () => new Response(CSV_TEXT, { status: 200 })
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		const sources = await fetchStatementSources({ token: LIVE, range: RANGE });
+
+		expect(await sources.pdf?.text()).toBe('%PDF-1.4');
+		expect(await sources.csv?.text()).toBe(CSV_TEXT);
+		expect(sources.failures).toEqual([]);
+		// One paste, two requests — the reader is not asked to find a second token.
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('reports the half that failed instead of returning the other in silence', async () => {
+		vi.stubGlobal(
+			'fetch',
+			routed({ pdf: () => envelope('%PDF-1.4'), csv: () => new Response('', { status: 500 }) })
+		);
+
+		const sources = await fetchStatementSources({ token: LIVE, range: RANGE });
+
+		expect(sources.pdf).not.toBeNull();
+		expect(sources.csv).toBeNull();
+		// The whole bug: a fetch that got balances and no categories must say so.
+		expect(sources.failures).toHaveLength(1);
+		expect(sources.failures[0]).toMatch(/Smart Search export did not arrive/);
+	});
+
+	it('keeps the certified statement even though the other half failed', async () => {
+		vi.stubGlobal(
+			'fetch',
+			routed({ pdf: () => envelope('%PDF-1.4'), csv: () => new Response('', { status: 500 }) })
+		);
+
+		const sources = await fetchStatementSources({ token: LIVE, range: RANGE });
+
+		expect(await sources.pdf?.text()).toBe('%PDF-1.4');
+	});
+
+	it('keeps the categories when it is the certified statement that failed', async () => {
+		vi.stubGlobal(
+			'fetch',
+			routed({
+				pdf: () => new Response('', { status: 500 }),
+				csv: () => new Response(CSV_TEXT, { status: 200 })
+			})
+		);
+
+		const sources = await fetchStatementSources({ token: LIVE, range: RANGE });
+
+		expect(sources.pdf).toBeNull();
+		expect(await sources.csv?.text()).toBe(CSV_TEXT);
+		expect(sources.failures[0]).toMatch(/certified statement did not arrive/);
+	});
+
+	it('names both halves when the bank refuses the token outright', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+
+		const sources = await fetchStatementSources({ token: LIVE, range: RANGE });
+
+		expect(sources.pdf).toBeNull();
+		expect(sources.csv).toBeNull();
+		expect(sources.failures).toHaveLength(2);
+		expect(sources.failures[0]).toMatch(/certified statement did not arrive/);
+	});
+
+	it('lets the reader’s own cancel through rather than reporting it as a failure', async () => {
+		const abort = new DOMException('aborted', 'AbortError');
+		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abort));
+
+		await expect(fetchStatementSources({ token: LIVE, range: RANGE })).rejects.toBe(abort);
+	});
+});
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	BankRequestError,
+	SMART_SEARCH_URL,
 	STATEMENTS_URL,
 	fetchCertifiedStatement,
+	fetchSmartSearch,
+	fetchStatementSources,
 	isExpired,
 	normaliseToken,
+	parseAccountIds,
 	suggestRange,
 	tokenExpiry
 } from './discovery.ts';
@@ -212,5 +312,175 @@ describe('suggestRange', () => {
 			from: '2027-03-01',
 			to: '2028-02-29'
 		});
+	});
+});
+
+describe('fetchSmartSearch', () => {
+	it('sends the bank its own search request, verbatim', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response('a,b\n1,2', { status: 200 }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await fetchSmartSearch({ token: LIVE, range: RANGE });
+
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe(SMART_SEARCH_URL);
+		expect(url).toContain('wpTransactions/V1/RW_DownloadTransactionsBySearch');
+		expect(init.method).toBe('POST');
+		expect((init.headers as Record<string, string>)['content-type']).toBe('text/plain');
+
+		// The capitalised pair, which the certified-statement call spells in
+		// lowercase. Both are the bank's; neither is a typo to tidy.
+		expect(JSON.parse(init.body as string)).toMatchObject({
+			FromDate: RANGE.from,
+			ToDate: RANGE.to,
+			fileFormat: 'CSV'
+		});
+	});
+
+	it('asks for a search no narrower than the period itself', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response('a,b\n1,2', { status: 200 }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await fetchSmartSearch({ token: LIVE, range: RANGE });
+
+		const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+		expect(body).toMatchObject({ SearchTerm: '', Debit: true, Credit: true, FromAmount: 0 });
+		expect(body.groupFilterList).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+	});
+
+	it('carries nobody’s account ids or address unless it is given them', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response('a,b\n1,2', { status: 200 }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await fetchSmartSearch({ token: LIVE, range: RANGE });
+
+		// Nothing personal is baked into this module; an unscoped call says so.
+		const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+		expect(body.AccountsList).toEqual([]);
+		expect(body.emailAddress).toBe('');
+	});
+
+	it('passes the reader’s own scope through when it has one', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response('a,b\n1,2', { status: 200 }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await fetchSmartSearch({
+			token: LIVE,
+			range: RANGE,
+			scope: { accounts: ['ACCOUNT-ONE'], emailAddress: 'reader@example.com' }
+		});
+
+		const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+		expect(body.AccountsList).toEqual(['ACCOUNT-ONE']);
+		expect(body.emailAddress).toBe('reader@example.com');
+	});
+
+	it('takes the CSV when the bank serves it as plain text', async () => {
+		const csv = '"Value Date","Amount"\n2026-08-13,-299.00';
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(csv, { status: 200 })));
+
+		const file = await fetchSmartSearch({ token: LIVE, range: RANGE });
+
+		expect(await file.text()).toBe(csv);
+	});
+
+	it('takes the CSV when it arrives base64 inside an envelope instead', async () => {
+		const csv = '"Value Date","Amount"\n2026-08-13,-299.00';
+		vi.stubGlobal(
+			'fetch',
+			vi
+				.fn()
+				.mockResolvedValue(
+					new Response(JSON.stringify({ FileData: btoa(csv), success: true }), { status: 200 })
+				)
+		);
+
+		const file = await fetchSmartSearch({ token: LIVE, range: RANGE });
+
+		expect(await file.text()).toBe(csv);
+	});
+
+	it('names it .csv, which is what files it as the categories half', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('a,b\n1,2', { status: 200 })));
+
+		const file = await fetchSmartSearch({ token: LIVE, range: RANGE });
+
+		expect(file.name).toMatch(/\.csv$/);
+		expect(file.name).toContain(RANGE.from);
+	});
+
+	it('says so when the period simply held nothing', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('   ', { status: 200 })));
+
+		await expect(fetchSmartSearch({ token: LIVE, range: RANGE })).rejects.toThrow(
+			/no Smart Search export/
+		);
+	});
+
+	it('reads a 401 as the five minutes having run out', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+
+		await expect(fetchSmartSearch({ token: LIVE, range: RANGE })).rejects.toThrow(
+			/token was rejected/
+		);
+	});
+});
+
+describe('fetchStatementSources', () => {
+	it('reports the half that failed instead of returning the other in silence', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(envelope('%PDF-1.4')));
+
+		const sources = await fetchStatementSources({ token: LIVE, range: RANGE });
+
+		expect(sources.pdf).not.toBeNull();
+		expect(sources.csv).toBeNull();
+		// The whole bug: a fetch that got balances and no categories must say so.
+		expect(sources.failures).toHaveLength(1);
+		expect(sources.failures[0]).toMatch(/Smart Search export did not arrive/);
+	});
+
+	it('keeps the certified statement even though the other half failed', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(envelope('%PDF-1.4')));
+
+		const sources = await fetchStatementSources({ token: LIVE, range: RANGE });
+
+		expect(await sources.pdf?.text()).toBe('%PDF-1.4');
+	});
+
+	it('names both halves when the bank refuses the token outright', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+
+		const sources = await fetchStatementSources({ token: LIVE, range: RANGE });
+
+		expect(sources.pdf).toBeNull();
+		expect(sources.csv).toBeNull();
+		expect(sources.failures).toHaveLength(2);
+		expect(sources.failures[0]).toMatch(/certified statement did not arrive/);
+	});
+
+	it('lets the reader’s own cancel through rather than reporting it as a failure', async () => {
+		const abort = new DOMException('aborted', 'AbortError');
+		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abort));
+
+		await expect(fetchStatementSources({ token: LIVE, range: RANGE })).rejects.toBe(abort);
+	});
+});
+
+describe('parseAccountIds', () => {
+	it('takes one id per line, as the field asks for', () => {
+		expect(parseAccountIds('ONE\nTWO\nTHREE')).toEqual(['ONE', 'TWO', 'THREE']);
+	});
+
+	it('takes them straight out of the request they were copied from', () => {
+		// Exactly what a devtools copy of `AccountsList` leaves on the clipboard.
+		expect(parseAccountIds('["ONE","TWO"]')).toEqual(['ONE', 'TWO']);
+	});
+
+	it('drops a repeat rather than asking the bank for it twice', () => {
+		expect(parseAccountIds('ONE\nTWO\nONE')).toEqual(['ONE', 'TWO']);
+	});
+
+	it('is empty for an empty paste, which is a real answer', () => {
+		expect(parseAccountIds('   \n  ')).toEqual([]);
 	});
 });
