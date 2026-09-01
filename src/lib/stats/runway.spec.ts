@@ -77,6 +77,33 @@ describe('buildRunway', () => {
 		expect((ninth?.balance ?? 0) - (tenth?.balance ?? 0)).toBeCloseTo(303.07, 2);
 	});
 
+	/**
+	 * A balance projected from everyday spending can only fall.
+	 *
+	 * The line used to climb towards payday on an account that receives money
+	 * irregularly — transfers from friends, loans repaid — because those rows
+	 * netted off the spending in the tails the everyday figure is the median of.
+	 * A rising runway is the one shape it must never draw: it says the reader can
+	 * spend more the longer they wait.
+	 */
+	it('never draws the everyday channel as money arriving', () => {
+		const windfalls = [
+			makeTransaction({ date: '2026-05-22', amount: 7100, merchant: 'PayShap' }),
+			makeTransaction({ date: '2026-06-22', amount: 5000, merchant: 'Loan' })
+		];
+		const runway = buildRunway(forecastOf(statement(windfalls)), { balance: 5000 });
+
+		// Every step from one day to the next is downwards, once the named charges
+		// are set aside: the everyday channel takes money, it never brings it.
+		const projected = runway.days.filter((day) => day.isProjected && day.payments.length === 0);
+		for (const day of projected) {
+			const previous = runway.days[runway.days.indexOf(day) - 1];
+			if (previous !== undefined) expect(day.balance).toBeLessThan(previous.balance);
+		}
+
+		expect(runway.closing).toBeLessThan(runway.opening);
+	});
+
 	it('spreads the everyday figure evenly over the days that are left', () => {
 		const runway = buildRunway(forecastOf(), { balance: 5000 });
 

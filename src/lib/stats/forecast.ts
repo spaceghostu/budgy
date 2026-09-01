@@ -38,7 +38,7 @@
  * name or by average.
  */
 
-import type { MonthMetric, Transaction } from '../types.ts';
+import type { Flow, MonthMetric, Transaction } from '../types.ts';
 import { median } from './average.ts';
 import { round } from './balance.ts';
 import {
@@ -246,6 +246,12 @@ export interface Forecast {
 	 * Zero when the reader has asked for the named charges alone — see
 	 * {@link ForecastOptions.everyday} — which is what tells a page drawing this
 	 * that the line it has is narrower than the month.
+	 *
+	 * **One side of the money, never both.** The tails it is the median of hold
+	 * the side this metric is about — spending on a net or money-out forecast,
+	 * income on a money-in one — so a net forecast's figure is negative or
+	 * nothing, and can never lift the line it is drawn on. See
+	 * {@link tailTransactions} for why the two sides are not summed here.
 	 */
 	readonly everyday: number;
 	/**
@@ -263,11 +269,9 @@ export interface Forecast {
 	 * and the list is empty wherever {@link everyday} is zero — a month with no
 	 * tails to learn from has no shares to divide.
 	 *
-	 * Learned from the **expense** rows in those tails alone. The tails
-	 * themselves are net on a net forecast, so a stray refund belongs in the
-	 * median it moves; but "still to be spent by category" is a one-sided
-	 * question, and a category that is net positive over the window would take a
-	 * negative share of the spending — which is not a reading, it is an artefact.
+	 * Learned from the same rows {@link everyday} is the median of, which are
+	 * expense rows alone — so a category can never take a negative share of the
+	 * spending, which is not a reading but an artefact.
 	 */
 	readonly everydayShares: readonly CategoryShare[];
 	/** Complete past cycles the projection was learned from. */
@@ -978,13 +982,34 @@ interface TailQuery {
  * told what the last few days usually cost rather than what a month costs. A
  * cycle shorter than this one simply has no rows in the days past its end, which
  * is the honest answer for it.
+ *
+ * **One side of the money only: the side this metric counts.** On a net forecast
+ * that is spending, and the distinction matters. Summed net, a windfall in the
+ * tail — a transfer from a friend, a loan repaid, a refund — cancels the
+ * spending it happened to land beside, and on an account that receives money
+ * irregularly the median of those tails can come out *positive*. A balance
+ * projected from a positive everyday figure climbs towards payday, telling the
+ * reader they can spend more the longer they wait, over copy calling the same
+ * figure "everyday spending". Money in still reaches the projection as a named
+ * charge, where it has a date and a payee on it and can be checked.
+ *
+ * A money-in forecast keeps the opposite side, so the channel goes on meaning
+ * "the rest of what this metric adds up" wherever it is read from. Net is the
+ * one metric that adds up both sides and still wants one here: it is a balance,
+ * and the question the everyday channel answers about a balance is what the rest
+ * of the month *costs*.
  */
+function everydaySide(flow: Flow, metric: MonthMetric): boolean {
+	return metric === 'in' ? flow === 'income' : flow === 'expense';
+}
+
 function tailTransactions(
 	history: readonly Transaction[],
 	query: TailQuery
 ): readonly Transaction[] {
 	return history.filter(
 		(transaction) =>
+			everydaySide(transaction.flow, query.metric) &&
 			cycleOf(transaction.date, query.start) === query.cycle &&
 			cycleDay(transaction.date, query.start) > query.after &&
 			!query.skip(transaction)
@@ -994,10 +1019,12 @@ function tailTransactions(
 /**
  * How the untracked spending in those tails divides by category.
  *
- * Shares of the spending rather than of the net, for the reason on
- * {@link Forecast.everydayShares}: a category the window happened to refund more
- * than it charged would otherwise take a negative slice of a positive figure.
- * Income rows are simply not part of the question being asked.
+ * Shares of the spending, for the reason on {@link Forecast.everydayShares}: a
+ * category the window happened to refund more than it charged would otherwise
+ * take a negative slice. The rows arrive filtered — {@link tailTransactions}
+ * keeps money in out of the tails entirely — so the guard below is belt to that
+ * braces, and holds this function to its own contract wherever it is called from
+ * next.
  *
  * Sums to exactly 1 where anything was spent, so a caller apportioning a figure
  * by these shares gets that figure back. Empty where nothing was.

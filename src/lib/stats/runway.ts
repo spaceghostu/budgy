@@ -211,8 +211,12 @@ export function buildRunway(forecast: Forecast, options: RunwayOptions): Runway 
 		payments,
 		committedOut: round(sum(payments, 'expense')),
 		committedIn: round(sum(payments, 'income')),
-		// Reported as a magnitude, like every other figure a reader reads: on a
-		// net forecast the everyday channel is spending, and so is negative.
+		// Reported as a magnitude, like every other figure a reader reads. The
+		// channel is spending and a net forecast signs it negative, which
+		// `tailTransactions` guarantees by counting expense rows alone — without
+		// that, money in could turn the figure positive and this line would report
+		// an expected *inflow* as "everyday spending" while the chart above it
+		// climbed.
 		everyday: round(Math.abs(forecast.everyday)),
 		byCategory: byCategory(payments, round(Math.abs(forecast.everyday)), forecast.everydayShares),
 		monthsOfHistory: forecast.monthsOfHistory,

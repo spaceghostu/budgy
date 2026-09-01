@@ -29,3 +29,6 @@ vite.config.ts.timestamp-*
 reference/
 # Fetched bank statements — real financial data, never committed.
 statements/
+
+# Working notes — scratch, not part of the app.
+notes/

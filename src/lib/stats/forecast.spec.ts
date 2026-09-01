@@ -219,6 +219,78 @@ describe('buildForecast', () => {
 		expect(end?.high).toBe(550);
 	});
 
+	/**
+	 * The everyday channel is spending, on every metric.
+	 *
+	 * A net tail sums both sides of the money, so money in that is not a
+	 * recognised recurring charge — a transfer from a friend, a loan repaid, a
+	 * refund — used to cancel the spending it sat beside. Enough of it and the
+	 * median turned positive, and a *balance* projected from a positive everyday
+	 * figure climbs: the runway line rose towards payday, over copy calling the
+	 * same figure "everyday spending".
+	 *
+	 * So the tails count expenses alone. Money in still reaches the projection —
+	 * as a named charge, where it has a date and a payee on it — but it is never
+	 * folded into the figure that answers "what does the rest of the month cost".
+	 */
+	it('leaves irregular money in out of the everyday channel', () => {
+		const windfalls = [
+			makeTransaction({ date: '2026-05-28', amount: 4000, merchant: 'Friend' }),
+			makeTransaction({ date: '2026-06-29', amount: 4000, merchant: 'Someone else' })
+		];
+		const forecast = buildForecast(statement(windfalls), { metric: 'net' });
+
+		// The shop's 300 and 100 over those same days, and not a cent of the 4000
+		// that happened to land beside them.
+		expect(forecast.everyday).toBe(-200);
+	});
+
+	it('never projects the everyday channel as money coming in', () => {
+		// Two months whose tails net positive: the transfers in dwarf the spending.
+		const forecast = buildForecast(
+			[
+				makeTransaction({ date: '2026-05-26', amount: -100, merchant: 'Shop' }),
+				makeTransaction({ date: '2026-05-27', amount: 7100, merchant: 'PayShap' }),
+
+				makeTransaction({ date: '2026-06-26', amount: -100, merchant: 'Shop' }),
+				makeTransaction({ date: '2026-06-27', amount: 5000, merchant: 'Loan' }),
+
+				makeTransaction({ date: '2026-07-04', amount: -50, merchant: 'Shop' })
+			],
+			{ metric: 'net' }
+		);
+
+		// Spending, so it can only be negative or nothing.
+		expect(forecast.everyday).toBeLessThanOrEqual(0);
+		expect(forecast.everyday).toBe(-100);
+	});
+
+	/**
+	 * The channel means "the rest of what this metric adds up", so a money-in
+	 * forecast learns it from the money coming in — the mirror of the rule above,
+	 * and the reason the tails filter by metric rather than by expense alone.
+	 */
+	it('learns the everyday channel from money in on a money-in forecast', () => {
+		const forecast = buildForecast(
+			[
+				makeTransaction({ date: '2026-05-26', amount: -100, merchant: 'Shop' }),
+				makeTransaction({ date: '2026-05-27', amount: 400, merchant: 'Odd job' }),
+
+				makeTransaction({ date: '2026-06-26', amount: -100, merchant: 'Shop' }),
+				makeTransaction({ date: '2026-06-27', amount: 600, merchant: 'Another job' }),
+
+				makeTransaction({ date: '2026-07-04', amount: -50, merchant: 'Shop' })
+			],
+			{ metric: 'in' }
+		);
+
+		// June is the one complete cycle behind this month — May opens on the 26th
+		// and is dropped as partial — so its 600 is the median, and not a cent of
+		// the shop's spending is in it.
+		expect(forecast.monthsOfHistory).toBe(1);
+		expect(forecast.everyday).toBe(600);
+	});
+
 	it('lifts a net forecast by the salary the history expects', () => {
 		const forecast = buildForecast(statement(SALARY), { metric: 'net' });
 
