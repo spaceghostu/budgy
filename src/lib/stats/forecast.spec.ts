@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { addedKey, buildForecast, listPayees, type AddedCharge } from './forecast.ts';
+import {
+	addedKey,
+	buildForecast,
+	debtKey,
+	listPayees,
+	type AddedCharge,
+	type DebtCharge
+} from './forecast.ts';
 import { makeTransaction } from '../testing/transaction.ts';
 import type { Transaction } from '../types.ts';
 
@@ -844,14 +851,158 @@ describe('what last month offers', () => {
 	});
 });
 
+/** How the factory files every row, and that a card payment is not a debit order. */
+const FILED = { category: 'Groceries', isDebitOrder: false } as const;
+
+/** An instalment off a credit report, with nothing on the statement paying it. */
+function debt(overrides: Partial<DebtCharge> = {}): DebtCharge {
+	return {
+		accountId: 'loan',
+		name: 'Example Lender',
+		amount: 800,
+		day: 15,
+		linkedMerchant: null,
+		...overrides
+	};
+}
+
+describe('instalments off a credit report', () => {
+	it('expects a debt nothing on the statement pays, as a row of its own', () => {
+		const forecast = buildForecast(statement(), { metric: 'out', debts: [debt()] });
+
+		expect(forecast.expected.find((payment) => payment.key === debtKey('loan'))).toEqual({
+			key: 'debt:loan',
+			merchant: 'Example Lender',
+			category: 'Debt Repayment',
+			amount: 800,
+			flow: 'expense',
+			day: 15,
+			date: '2026-07-15',
+			dueDate: '2026-07-15',
+			seen: 0,
+			overdue: false,
+			isDebitOrder: false,
+			source: 'debt',
+			included: true
+		});
+		expect(forecast.debtsCovered).toEqual([]);
+	});
+
+	it('moves what is committed by exactly that instalment, and nothing else', () => {
+		const without = buildForecast(statement(), { metric: 'out' });
+		const forecast = buildForecast(statement(), { metric: 'out', debts: [debt()] });
+
+		expect(forecast.committed).toBe(without.committed + 800);
+		expect(forecast.everyday).toBe(without.everyday);
+	});
+
+	it('adds nothing for a debt a live debit order already pays', () => {
+		const without = buildForecast(statement(), { metric: 'out' });
+		const forecast = buildForecast(statement(), {
+			metric: 'out',
+			debts: [debt({ linkedMerchant: 'Gym' })]
+		});
+
+		expect(forecast.expected).toEqual(without.expected);
+		expect(forecast.committed).toBe(without.committed);
+		expect(forecast.debtsCovered).toEqual(['loan']);
+	});
+
+	it('does not expect a debt again once its debit order has gone off this month', () => {
+		// The regression this is here for: July's debit order is in the actuals and
+		// so on no list of what is still to come. Matched against that list, the
+		// loan would look unpaid and be expected a second time.
+		const paid = statement([
+			makeTransaction({ date: '2026-07-08', amount: -500, merchant: 'Gym', type: 'Debit order' })
+		]);
+		const without = buildForecast(paid, { metric: 'out' });
+		const forecast = buildForecast(paid, {
+			metric: 'out',
+			debts: [debt({ linkedMerchant: 'Gym' })]
+		});
+
+		expect(forecast.expected).toEqual([]);
+		expect(forecast.projected).toBe(without.projected);
+		expect(forecast.debtsCovered).toEqual(['loan']);
+	});
+
+	it('expects a debt whose debit order the history had given up on', () => {
+		// The lender billed in April and not since, so the staleness rule let it go.
+		// The bureau says it is still owed — and it is expected under the payee's
+		// own key, so its arriving would be noticed.
+		const rows = statement([
+			makeTransaction({ date: '2026-04-01', amount: -100, merchant: 'Shop' }),
+			makeTransaction({ date: '2026-04-12', amount: -650, merchant: 'Lender', type: 'Debit order' })
+		]);
+		expect(
+			buildForecast(rows, { metric: 'out' }).expected.map((payment) => payment.merchant)
+		).toEqual(['Gym']);
+
+		const forecast = buildForecast(rows, {
+			metric: 'out',
+			debts: [debt({ linkedMerchant: 'Lender' })]
+		});
+		const lender = forecast.expected.find((payment) => payment.key === 'expense:Lender');
+
+		expect(lender).toMatchObject({ source: 'debt', amount: 650, day: 12, isDebitOrder: true });
+		expect(forecast.expected.some((payment) => payment.key === debtKey('loan'))).toBe(false);
+	});
+
+	it('leaves a debt paid from another account off this one', () => {
+		const without = buildForecast(statement(), { metric: 'out' });
+		const forecast = buildForecast(statement(), {
+			metric: 'out',
+			debts: [debt({ linkedMerchant: 'Lender on the savings account' })]
+		});
+
+		expect(forecast.expected).toEqual(without.expected);
+		expect(forecast.debtsCovered).toEqual(['loan']);
+	});
+
+	it('stops counting a debt the reader ticks off, and keeps the row', () => {
+		const without = buildForecast(statement(), { metric: 'out' });
+		const forecast = buildForecast(statement(), {
+			metric: 'out',
+			debts: [debt()],
+			excluded: [debtKey('loan')]
+		});
+
+		expect(forecast.expected.find((payment) => payment.key === debtKey('loan'))?.included).toBe(
+			false
+		);
+		expect(forecast.committed).toBe(without.committed);
+	});
+
+	it('has no use for a debt on a money-in forecast', () => {
+		const forecast = buildForecast(statement(SALARY), { metric: 'in', debts: [debt()] });
+
+		expect(forecast.expected.some((payment) => payment.source === 'debt')).toBe(false);
+	});
+
+	it('pulls a net forecast down by the instalment', () => {
+		const without = buildForecast(statement(), { metric: 'net' });
+		const forecast = buildForecast(statement(), { metric: 'net', debts: [debt()] });
+
+		expect(forecast.projected).toBe(without.projected - 800);
+	});
+});
+
 describe('listPayees', () => {
 	it('offers every payee the statement has, heaviest first', () => {
 		expect(listPayees(statement(SALARY))).toEqual([
-			{ merchant: 'Employer', flow: 'income', amount: 10_000, months: 2, arrived: false },
-			{ merchant: 'Gym', flow: 'expense', amount: 500, months: 2, arrived: false },
+			{ ...FILED, merchant: 'Employer', flow: 'income', amount: 10_000, months: 2, arrived: false },
+			{
+				merchant: 'Gym',
+				flow: 'expense',
+				amount: 500,
+				months: 2,
+				arrived: false,
+				category: 'Groceries',
+				isDebitOrder: true
+			},
 			// May cost 400 and June 300, so the middle billing month is 350 — and
 			// the shop has already billed in July, the month being forecast.
-			{ merchant: 'Shop', flow: 'expense', amount: 350, months: 2, arrived: true }
+			{ ...FILED, merchant: 'Shop', flow: 'expense', amount: 350, months: 2, arrived: true }
 		]);
 	});
 
@@ -901,7 +1052,8 @@ describe('listPayees', () => {
 				flow: 'expense',
 				amount: 900,
 				months: 1,
-				arrived: false
+				arrived: false,
+				...FILED
 			});
 		}
 	});

@@ -6,6 +6,7 @@
  * statement on a shared machine is worth an explicit yes.
  */
 
+import type { CreditAccount, CreditReport } from '../credit/types.ts';
 import type { AddedCharge } from '../stats/forecast.ts';
 import { readMonthStart } from '../stats/cycle.ts';
 
@@ -22,7 +23,10 @@ const KEYS = {
 	recentCategories: 'budgy:recent-categories',
 	droppedCharges: 'budgy:dropped-charges',
 	addedCharges: 'budgy:added-charges',
-	bankAccounts: 'budgy:discovery-accounts'
+	bankAccounts: 'budgy:discovery-accounts',
+	creditSnapshots: 'budgy:credit-snapshots',
+	debtSettings: 'budgy:debt-settings',
+	debtExtra: 'budgy:debt-extra'
 } as const;
 
 export type Theme = 'light' | 'dark' | 'system';
@@ -363,6 +367,90 @@ export function saveBankAccounts(accounts: readonly string[]): void {
 	writeJson(KEYS.bankAccounts, accounts);
 }
 
+/**
+ * How many credit reports are kept. Three years of monthly readings.
+ *
+ * A reduced report is a few hundred bytes an account, so this is a bound on a
+ * pathological case rather than a budget anyone will meet.
+ */
+export const MAX_CREDIT_SNAPSHOTS = 36;
+
+/**
+ * The credit reports the reader has brought in, oldest first.
+ *
+ * Only ever the reduced {@link CreditReport} — creditor, balance, instalment,
+ * status. Unlike a statement, whose source files are kept so it can be re-read,
+ * the report these came from is never stored: it carries an identity number and
+ * full account numbers, and nothing the app does needs either.
+ *
+ * Every reading is kept rather than only the newest, because one report is a
+ * balance and two are a direction.
+ */
+export function loadCreditSnapshots(): readonly CreditReport[] {
+	return readJson(KEYS.creditSnapshots, isCreditReports) ?? [];
+}
+
+export function saveCreditSnapshots(snapshots: readonly CreditReport[]): void {
+	if (snapshots.length === 0) {
+		clearKey('creditSnapshots');
+		return;
+	}
+
+	writeJson(KEYS.creditSnapshots, snapshots.slice(-MAX_CREDIT_SNAPSHOTS));
+}
+
+/**
+ * What the reader has said about one debt, which no report can.
+ *
+ * Keyed by {@link CreditAccount.id}, so it follows the account from one report
+ * to the next.
+ */
+export interface DebtSetting {
+	/** Nominal annual interest rate as a percentage. A bureau rarely carries it. */
+	readonly rate?: number;
+	/** Day of the reader's month the instalment leaves on, where no statement shows it. */
+	readonly paymentDay?: number;
+	/**
+	 * Which payee on the statement pays this debt.
+	 *
+	 * Three states, and the difference between the last two is the point: a
+	 * merchant name is the reader confirming a link, `null` is the reader saying
+	 * it is **not** on the statement — which must never be suggested again — and
+	 * absent leaves the app free to work it out.
+	 */
+	readonly link?: string | null;
+	/** True to leave the debt out of the forecast and the plan altogether. */
+	readonly ignored?: boolean;
+}
+
+export function loadDebtSettings(): Record<string, DebtSetting> {
+	return readJson(KEYS.debtSettings, isDebtSettings) ?? {};
+}
+
+export function saveDebtSettings(settings: Record<string, DebtSetting>): void {
+	if (Object.keys(settings).length === 0) {
+		clearKey('debtSettings');
+		return;
+	}
+
+	writeJson(KEYS.debtSettings, settings);
+}
+
+/** What the reader can put towards their debts each month, over the instalments. */
+export function loadDebtExtra(): number {
+	const extra = readJson(KEYS.debtExtra, isNumber);
+	return extra !== null && Number.isFinite(extra) && extra > 0 ? extra : 0;
+}
+
+export function saveDebtExtra(extra: number): void {
+	if (!Number.isFinite(extra) || extra <= 0) {
+		clearKey('debtExtra');
+		return;
+	}
+
+	writeJson(KEYS.debtExtra, extra);
+}
+
 function isString(value: unknown): value is string {
 	return typeof value === 'string';
 }
@@ -450,4 +538,91 @@ function hasStringFields(value: unknown, fields: readonly string[]): boolean {
 
 	const candidate = value as Record<string, unknown>;
 	return fields.every((field) => typeof candidate[field] === 'string');
+}
+
+/** Past this a figure is a typo or a hand edit, and would overflow the sums it joins. */
+const MAX_AMOUNT = 1e12;
+
+function isAmount(value: unknown): value is number {
+	return isNumber(value) && Number.isFinite(value) && value >= 0 && value <= MAX_AMOUNT;
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isIsoDate(value: unknown): value is string {
+	return isString(value) && ISO_DATE.test(value);
+}
+
+function isCreditReports(value: unknown): value is readonly CreditReport[] {
+	return Array.isArray(value) && value.every(isCreditReport);
+}
+
+function isCreditReport(value: unknown): value is CreditReport {
+	if (typeof value !== 'object' || value === null) return false;
+
+	const report = value as Record<string, unknown>;
+	return (
+		isIsoDate(report.reportDate) &&
+		(report.score === null || (isNumber(report.score) && Number.isFinite(report.score))) &&
+		Array.isArray(report.accounts) &&
+		report.accounts.every(isCreditAccount) &&
+		// Ids key rows on screen and the reader's settings: two accounts sharing
+		// one would share a rate and a link, and each would overwrite the other.
+		new Set(report.accounts.map((account) => account.id)).size === report.accounts.length
+	);
+}
+
+const CREDIT_KINDS: readonly unknown[] = ['loan', 'card', 'revolving', 'store', 'other'];
+const CREDIT_STATUSES: readonly unknown[] = ['current', 'arrears', 'closed', 'unknown'];
+
+/**
+ * Read back a stored account, or refuse it.
+ *
+ * Field by field for the same reason as a stored charge: the balance and the
+ * instalment reach a projection and a fifty-year simulation, and neither
+ * survives a `NaN`.
+ */
+function isCreditAccount(value: unknown): value is CreditAccount {
+	if (typeof value !== 'object' || value === null) return false;
+
+	const account = value as Record<string, unknown>;
+	return (
+		isString(account.id) &&
+		account.id !== '' &&
+		isString(account.creditor) &&
+		CREDIT_KINDS.includes(account.kind) &&
+		isAmount(account.balance) &&
+		isAmount(account.instalment) &&
+		isAmount(account.arrears) &&
+		CREDIT_STATUSES.includes(account.status) &&
+		(account.opened === '' || isIsoDate(account.opened)) &&
+		(account.limit === null || isAmount(account.limit))
+	);
+}
+
+function isDebtSettings(value: unknown): value is Record<string, DebtSetting> {
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.values(value).every(isDebtSetting)
+	);
+}
+
+function isDebtSetting(value: unknown): value is DebtSetting {
+	if (typeof value !== 'object' || value === null) return false;
+
+	const setting = value as Record<string, unknown>;
+	return (
+		(setting.rate === undefined || (isAmount(setting.rate) && setting.rate <= 100)) &&
+		(setting.paymentDay === undefined ||
+			(isNumber(setting.paymentDay) &&
+				Number.isInteger(setting.paymentDay) &&
+				setting.paymentDay >= 1 &&
+				setting.paymentDay <= 31)) &&
+		(setting.link === undefined ||
+			setting.link === null ||
+			(isString(setting.link) && setting.link !== '')) &&
+		(setting.ignored === undefined || isBoolean(setting.ignored))
+	);
 }

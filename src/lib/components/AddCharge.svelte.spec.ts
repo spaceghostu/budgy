@@ -4,9 +4,11 @@ import { render } from 'vitest-browser-svelte';
 import AddCharge from './AddCharge.svelte';
 import type { Payee } from '../stats/forecast.ts';
 
+const FILED = { category: 'Pets', isDebitOrder: false } as const;
+
 const PAYEES: readonly Payee[] = [
-	{ merchant: 'Vet', flow: 'expense', amount: 350, months: 2, arrived: false },
-	{ merchant: 'Employer', flow: 'income', amount: 10_000, months: 6, arrived: false }
+	{ ...FILED, merchant: 'Vet', flow: 'expense', amount: 350, months: 2, arrived: false },
+	{ ...FILED, merchant: 'Employer', flow: 'income', amount: 10_000, months: 6, arrived: false }
 ];
 
 function draw(payees: readonly Payee[] = PAYEES, monthStart = 1, month = '2026-07') {
@@ -122,7 +124,7 @@ describe('AddCharge.svelte', () => {
 	});
 
 	it('says a payee that has already billed will have to wait for next month', async () => {
-		draw([{ merchant: 'Vet', flow: 'expense', amount: 350, months: 2, arrived: true }]);
+		draw([{ ...FILED, merchant: 'Vet', flow: 'expense', amount: 350, months: 2, arrived: true }]);
 		await openForm();
 
 		await page.getByRole('button', { name: 'Pick from history' }).click();

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import AiReportCard from '$lib/components/AiReportCard.svelte';
 	import { MODEL, type AiBrief } from '../ai/client.ts';
-	import { buildForecastPayload } from '../ai/forecast-payload.ts';
+	import { buildForecastPayload, type AiDebt } from '../ai/forecast-payload.ts';
 	import { FORECAST_SYSTEM_PROMPT, PLAN_TOOL, buildForecastPrompt } from '../ai/forecast-prompt.ts';
 	import { formatDate } from '../format.ts';
 	import { CALENDAR_START } from '../stats/cycle.ts';
@@ -19,6 +19,10 @@
 		isRelative?: boolean;
 		/** False when the page has been narrowed to the named charges alone. */
 		everydayCounted?: boolean;
+		/** The reader's debts, already reduced to what is sent. Empty for none. */
+		debts?: readonly AiDebt[];
+		/** `YYYY-MM-DD` the debt figures describe, or blank. */
+		debtReportDate?: string;
 	}
 
 	const {
@@ -26,7 +30,9 @@
 		window,
 		monthStart = CALENDAR_START,
 		isRelative = false,
-		everydayCounted = true
+		everydayCounted = true,
+		debts = [],
+		debtReportDate = ''
 	}: Props = $props();
 
 	let note = $state('');
@@ -38,7 +44,14 @@
 	 * is counting it.
 	 */
 	const payload = $derived(
-		buildForecastPayload(runway, { monthStart, isRelative, everydayCounted, window })
+		buildForecastPayload(runway, {
+			monthStart,
+			isRelative,
+			everydayCounted,
+			window,
+			debts,
+			debtReportDate
+		})
 	);
 
 	/** Fixed instructions and a forced tool, the way the insights card has them. */
@@ -67,7 +80,9 @@
 	onnote={(next) => (note = next)}
 	sendLabel="Plan the rest of my month"
 	busyLabel="Reading the {payload.period.daysLeft} days to payday…"
-	sends="what is in the account, the charges still expected and what each category usually takes"
+	sends={debts.length === 0
+		? 'what is in the account, the charges still expected and what each category usually takes'
+		: 'what is in the account, the charges still expected, what each category usually takes, and each debt on your credit report by lender, balance, instalment, arrears, status and any interest rate you entered'}
 	noteHint="Steers the plan — a bill you know is coming, an amount you are trying to keep back. Sent word for word, so leave anything out you would not want to send."
 	notePlaceholder="I need to keep R3 000 back for tyres. · Which of these can I put off until after payday? · Groceries are for three people, not one."
 	followUpPlaceholder="What would cutting the takeaways to nothing be worth? · Which of those is safe to skip this month? · Give me a daily number to stick to."

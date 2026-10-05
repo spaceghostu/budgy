@@ -13,6 +13,7 @@
 	import * as Alert from '$lib/components/ui/alert/index.js';
 	import { ToggleGroup, ToggleGroupItem } from '$lib/components/ui/toggle-group/index.js';
 	import { formatCount, formatCurrency, formatDate, formatOrdinal } from '$lib/format.js';
+	import { toAiDebts } from '$lib/ai/forecast-payload.js';
 	import { useStatement } from '$lib/state/context.js';
 	import { isCalendarStart } from '$lib/stats/cycle.js';
 	import {
@@ -56,6 +57,7 @@
 			window: learnFrom,
 			excluded: statement.droppedCharges,
 			added: statement.addedCharges,
+			debts: statement.debtCharges,
 			candidateMonth: offerFrom,
 			monthStart: statement.monthStart
 		})
@@ -99,6 +101,7 @@
 					window: learnFrom,
 					excluded: statement.droppedCharges,
 					added: statement.addedCharges,
+					debts: statement.debtCharges,
 					candidateMonth: offerFrom,
 					monthStart: statement.monthStart,
 					everyday: false
@@ -132,6 +135,16 @@
 			window: learnFrom,
 			monthStart: statement.monthStart
 		})
+	);
+
+	/**
+	 * The debts as Claude is told about them.
+	 *
+	 * Read off the forecast on screen, so a debt is called handled exactly when
+	 * this page's own figures already answer for its instalment.
+	 */
+	const debts = $derived(
+		toAiDebts(statement.credit.open, statement.credit.settings, forecast, runway.payments)
 	);
 
 	const relative = $derived(statement.balanceNowIsRelative);
@@ -416,6 +429,8 @@
 			monthStart={statement.monthStart}
 			isRelative={relative}
 			everydayCounted={everydayOn}
+			{debts}
+			debtReportDate={statement.credit.latest?.reportDate ?? ''}
 		/>
 	{/if}
 {/if}

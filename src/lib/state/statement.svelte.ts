@@ -18,10 +18,12 @@ import {
 } from '../stats/insights.ts';
 import { buildBalanceSeries, hasPrintedBalances, usesPrintedBalances } from '../stats/balance.ts';
 import { CALENDAR_START, readMonthStart } from '../stats/cycle.ts';
-import { addedKey, type AddedCharge } from '../stats/forecast.ts';
+import { matchDebts, toDebtCharges } from '../stats/debt-match.ts';
+import { addedKey, listPayees, type AddedCharge } from '../stats/forecast.ts';
 import { listMonths } from '../stats/monthly.ts';
 import { buildNetWorth } from '../stats/networth.ts';
 import type { Insights, ParseIssue, Transaction } from '../types.ts';
+import { CreditState } from './credit.svelte.ts';
 import { StatementLibrary } from './library.svelte.ts';
 import type { StatementSummary } from './library.ts';
 import {
@@ -131,6 +133,9 @@ export class StatementState {
 	/** Every statement kept on this device, and which of them is on screen. */
 	readonly library = new StatementLibrary();
 
+	/** What a credit bureau says the reader owes, and what they have said about it. */
+	readonly credit = new CreditState();
+
 	/** The files behind the open statement, kept so it can be re-filed whole. */
 	private pdfBytes: Uint8Array | null = null;
 	private csvText = '';
@@ -181,6 +186,25 @@ export class StatementState {
 			...NO_FILTERS,
 			account: this.account === ALL_ACCOUNTS ? null : this.account
 		})
+	);
+
+	/**
+	 * Which payee on the statement pays each debt on the credit report.
+	 *
+	 * Read against every account, not the one selected: a loan paid from savings
+	 * is paid, and the cheque account's forecast must not expect it as well.
+	 */
+	readonly debtMatches = $derived(
+		matchDebts(
+			this.credit.open,
+			listPayees(this.transactions, { monthStart: this.monthStart }),
+			this.credit.settings
+		)
+	);
+
+	/** The credit report's instalments, as the forecast takes them. */
+	readonly debtCharges = $derived(
+		toDebtCharges(this.credit.open, this.debtMatches, this.credit.settings)
 	);
 
 	/** The last date in the statement — "recent" is relative to the data, not today. */

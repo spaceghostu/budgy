@@ -139,15 +139,18 @@ export interface ExpectedPayment {
 	readonly overdue: boolean;
 	readonly isDebitOrder: boolean;
 	/**
-	 * Where the row came from: the recurring test, the reader, or last month.
+	 * Where the row came from: the recurring test, the reader, last month, or
+	 * the reader's credit report.
 	 *
 	 * The detector is deliberately conservative — see `findRecurring` — so a
 	 * quarterly premium or a loan that moves about never qualifies, and the
 	 * reader is the one who knows it is coming anyway. A `candidate` is neither:
 	 * a payee last month had, offered on {@link Forecast.candidates} for the
-	 * reader to say yes or nothing to, and counted only once they have.
+	 * reader to say yes or nothing to, and counted only once they have. A `debt`
+	 * is an instalment a credit bureau says is owed and nothing on the statement
+	 * was found to be paying — see {@link DebtCharge}.
 	 */
-	readonly source: 'history' | 'added' | 'candidate';
+	readonly source: 'history' | 'added' | 'candidate' | 'debt';
 	/**
 	 * False when the reader has said this one is not coming.
 	 *
@@ -288,6 +291,16 @@ export interface Forecast {
 	readonly window: ForecastWindow;
 	/** True when the cycle is over: there is nothing left to project. */
 	readonly isComplete: boolean;
+	/**
+	 * The debts whose instalment a payee on the statement already answers for,
+	 * by {@link DebtCharge.accountId}.
+	 *
+	 * Named because {@link expected} cannot say it. A loan whose debit order went
+	 * off on the 3rd is in the actuals and on no list of what is still to come,
+	 * so anything reading the debts beside this forecast would otherwise take it
+	 * for an instalment still owed this month.
+	 */
+	readonly debtsCovered: readonly string[];
 }
 
 /**
@@ -325,6 +338,40 @@ export interface AddedCustom {
 }
 
 /**
+ * An instalment the reader's credit report says they owe each month.
+ *
+ * Not an {@link AddedCharge}, though it reaches the projection the same way: a
+ * charge the reader typed is the only copy of what they typed, while this is
+ * read off a report and replaced by the next one. The bureau knows the amount
+ * and nothing about the day, so the day is the reader's, or the opening one.
+ */
+export interface DebtCharge {
+	/** The credit account's own id — what the row and its tick are keyed by. */
+	readonly accountId: string;
+	/** The lender, as a row should name it. */
+	readonly name: string;
+	/** Positive. The monthly instalment. */
+	readonly amount: number;
+	/** Day of the cycle it is expected on. */
+	readonly day: number;
+	/**
+	 * The payee on the statement that pays it, or `null` for none.
+	 *
+	 * A linked debt is the same money as that payee's own charge, and must not
+	 * be expected beside it. See `matchDebts` for how the link is arrived at.
+	 */
+	readonly linkedMerchant: string | null;
+}
+
+/** The key a debt's own row takes — only ever used for one nothing else pays. */
+export function debtKey(accountId: string): string {
+	return `debt:${accountId}`;
+}
+
+/** The category an instalment is filed under when no statement row files it. */
+const DEBT_CATEGORY = 'Debt Repayment';
+
+/**
  * What a charge is called in {@link ForecastOptions.excluded} and on the row.
  *
  * A merchant the reader vouches for takes the same key the detector would have
@@ -358,6 +405,12 @@ export interface ForecastOptions {
 	 * rows for one commitment would be counted twice.
 	 */
 	readonly added?: readonly AddedCharge[];
+	/**
+	 * Instalments off the reader's credit report. See {@link DebtCharge}.
+	 *
+	 * Money out, so a money-in forecast ignores them.
+	 */
+	readonly debts?: readonly DebtCharge[];
 	/**
 	 * Which past cycle to offer payees from. See {@link Forecast.candidates}.
 	 *
@@ -398,6 +451,10 @@ export interface Payee {
 	 * a form that did not say so would look like a button that does nothing.
 	 */
 	readonly arrived: boolean;
+	/** The bank's filing of its newest row — "Debt Repayment" is a lender. */
+	readonly category: string;
+	/** True when every row of it was collected by debit order. */
+	readonly isDebitOrder: boolean;
 }
 
 /**
@@ -458,7 +515,9 @@ export function listPayees(
 				flow: charge.flow,
 				amount: charge.amount,
 				months: charge.months.length,
-				arrived: arrived.has(keyOf(charge.merchant, charge.flow))
+				arrived: arrived.has(keyOf(charge.merchant, charge.flow)),
+				category: charge.category,
+				isDebitOrder: charge.isDebitOrder
 			};
 		})
 		.filter((payee) => payee.months > 0)
@@ -503,7 +562,12 @@ export function buildForecast(
 	const live = new Set(cycles.slice(-STALE_AFTER_CYCLES));
 
 	const context = { history, fallback: whole, metric, start };
-	const charges = withAdded(recurringCharges(history, metric, start), options.added ?? [], context);
+	const { charges, covered: debtsCovered } = withDebts(
+		withAdded(recurringCharges(history, metric, start), options.added ?? [], context),
+		options.debts ?? [],
+		context,
+		live
+	);
 	// The channels are split on the whole recurring set, not on what is still
 	// expected: a debit order that already went off this month is in the actuals,
 	// and letting its past occurrences into the everyday figure as well would
@@ -602,7 +666,8 @@ export function buildForecast(
 		monthsOfHistory: cycles.length,
 		monthsAvailable: available.length,
 		window,
-		isComplete
+		isComplete,
+		debtsCovered
 	};
 }
 
@@ -626,7 +691,8 @@ function emptyForecast(metric: MonthMetric, window: ForecastWindow): Forecast {
 		monthsOfHistory: 0,
 		monthsAvailable: 0,
 		window,
-		isComplete: false
+		isComplete: false,
+		debtsCovered: []
 	};
 }
 
@@ -756,6 +822,88 @@ function withAdded(
 	return charges;
 }
 
+/**
+ * Fold the credit report's instalments in, without expecting any of them twice.
+ *
+ * The whole job is that last clause. An instalment the bureau reports and a
+ * debit order the statement shows are one payment seen from both ends, so a
+ * debt with a payee is resolved against that payee's own charge **here** —
+ * before anything asks what has arrived this month. Resolved any later, a loan
+ * whose debit order went off on the 3rd would be missing from the list of what
+ * is still expected, look unpaid, and be expected a second time.
+ *
+ * - **Its payee is already a live charge.** Nothing is added. That charge is the
+ *   one row, at what the bank actually takes, fees and cover included.
+ * - **Its payee is in this account's history but is not live.** The recurring
+ *   test let it go, or it slipped two months. The bureau says it is still owed,
+ *   so it is expected again — under the payee's own key, so that its arriving is
+ *   noticed and its past rows stay out of the everyday figure.
+ * - **Its payee is not in this account at all.** It is paid from another
+ *   account, and is no business of this balance.
+ * - **It has no payee.** It gets a row of its own, for the reader to tick off
+ *   or link.
+ *
+ * @returns The charges, and the debts a payee answers for.
+ */
+function withDebts(
+	found: ReadonlyMap<string, Charge>,
+	debts: readonly DebtCharge[],
+	context: AddedContext,
+	live: ReadonlySet<string>
+): { readonly charges: ReadonlyMap<string, Charge>; readonly covered: readonly string[] } {
+	if (debts.length === 0 || !counts('expense', context.metric)) {
+		return { charges: found, covered: [] };
+	}
+
+	const charges = new Map(found);
+	const covered: string[] = [];
+
+	for (const debt of debts) {
+		if (debt.linkedMerchant === null) {
+			charges.set(debtKey(debt.accountId), {
+				source: 'debt',
+				merchant: debt.name,
+				category: DEBT_CATEGORY,
+				flow: 'expense',
+				amount: debt.amount,
+				day: debt.day,
+				months: [],
+				isDebitOrder: false
+			});
+			continue;
+		}
+
+		covered.push(debt.accountId);
+
+		const key = keyOf(debt.linkedMerchant, 'expense');
+		const existing = charges.get(key);
+		if (existing !== undefined && isLive(existing, live)) continue;
+
+		const described = describeMerchant(
+			{ kind: 'merchant', merchant: debt.linkedMerchant, flow: 'expense' },
+			context
+		);
+		if (described.months.length > 0) charges.set(key, { source: 'debt', ...described });
+	}
+
+	return { charges, covered };
+}
+
+/**
+ * True for a charge the projection goes on expecting.
+ *
+ * A charge the reader added, or one off their credit report, is live because
+ * they or the bureau said so — the staleness rule reads a history that, for
+ * these, is the very thing that could not see them.
+ */
+function isLive(charge: Charge, live: ReadonlySet<string>): boolean {
+	return (
+		charge.source === 'added' ||
+		charge.source === 'debt' ||
+		charge.months.some((month) => live.has(month))
+	);
+}
+
 /** True when this side of the money is one the metric adds up at all. */
 function counts(flow: 'income' | 'expense', metric: MonthMetric): boolean {
 	return metric === 'net' || (metric === 'out' ? flow === 'expense' : flow === 'income');
@@ -870,14 +1018,7 @@ function expectedPayments(
 	);
 
 	return [...charges.entries()]
-		.filter(
-			([key, charge]) =>
-				!arrived.has(key) &&
-				// A charge the reader added is live because they said so — the
-				// staleness rule reads a history that, for these, is the very thing
-				// that could not see them.
-				(charge.source === 'added' || charge.months.some((month) => live.has(month)))
-		)
+		.filter(([key, charge]) => !arrived.has(key) && isLive(charge, live))
 		.map(([key, charge]) => toPayment(key, charge, position))
 		.sort((a, b) => a.day - b.day || b.amount - a.amount || a.merchant.localeCompare(b.merchant));
 }

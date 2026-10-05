@@ -39,7 +39,8 @@
 	 */
 	const filterScope = $derived.by((): 'full' | 'account' | 'none' => {
 		const path = page.url.pathname;
-		if (path.startsWith('/history') || path.startsWith('/net-worth')) return 'none';
+		if (['/history', '/net-worth', '/debts'].some((prefix) => path.startsWith(prefix)))
+			return 'none';
 
 		return path.startsWith('/forecast') ? 'account' : 'full';
 	});

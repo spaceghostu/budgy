@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import ExpectedPayments from './ExpectedPayments.svelte';
 import { formatCurrency } from '../format.ts';
-import { buildForecast, type AddedCharge } from '../stats/forecast.ts';
+import { buildForecast, type AddedCharge, type DebtCharge } from '../stats/forecast.ts';
 import { makeTransaction } from '../testing/transaction.ts';
 import type { Transaction } from '../types.ts';
 
@@ -38,6 +38,7 @@ interface DrawOptions {
 	readonly transactions?: readonly Transaction[];
 	readonly excluded?: readonly string[];
 	readonly added?: readonly AddedCharge[];
+	readonly debts?: readonly DebtCharge[];
 	readonly onremove?: (key: string) => void;
 	readonly onvouch?: (payment: { merchant: string; flow: string }) => void;
 	readonly onmonth?: (month: string) => void;
@@ -52,6 +53,7 @@ function draw(options: DrawOptions = {}) {
 		metric: 'out',
 		excluded: options.excluded,
 		added: options.added,
+		debts: options.debts,
 		candidateMonth: options.candidateMonth
 	});
 
@@ -395,5 +397,22 @@ describe('ExpectedPayments.svelte', () => {
 			.element(page.getByText(/Jun 2026 has that this month has not seen/))
 			.toBeInTheDocument();
 		expect(await page.getByRole('button', { name: 'Month to offer from' }).all()).toHaveLength(0);
+	});
+
+	it('says a debt came off the credit report, and does not call it late for a day nobody saw', async () => {
+		// Placed on the 1st for want of anything better, which the 10th is past.
+		draw({
+			debts: [{ accountId: 'loan', name: 'Northwind', amount: 800, day: 1, linkedMerchant: null }],
+			onremove: vi.fn()
+		});
+
+		const row = page.getByRole('listitem').filter({ hasText: 'Northwind' });
+		await expect.element(row.getByText(/from your credit report/)).toBeInTheDocument();
+		await expect.element(row.getByText('Late')).not.toBeInTheDocument();
+		await expect.element(row.getByText(/was due/)).not.toBeInTheDocument();
+		// The bureau's to replace, not the reader's to delete.
+		await expect
+			.element(row.getByRole('button', { name: 'Remove Northwind' }))
+			.not.toBeInTheDocument();
 	});
 });

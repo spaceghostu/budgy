@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { TOP_OUTLOOK, TOP_PAYMENTS, buildForecastPayload } from './forecast-payload.ts';
-import { buildForecast } from '../stats/forecast.ts';
+import {
+	TOP_DEBTS,
+	TOP_OUTLOOK,
+	TOP_PAYMENTS,
+	buildForecastPayload,
+	toAiDebts
+} from './forecast-payload.ts';
+import { buildForecast, type DebtCharge } from '../stats/forecast.ts';
 import { buildRunway, type Runway } from '../stats/runway.ts';
+import { makeCreditAccount } from '../testing/credit.ts';
 import { makeTransaction } from '../testing/transaction.ts';
 import type { Transaction } from '../types.ts';
 
@@ -159,5 +166,132 @@ describe('buildForecastPayload', () => {
 		expect(payload.payments).toEqual([]);
 		expect(payload.byCategory).toEqual([]);
 		expect(payload.period.daysLeft).toBe(0);
+	});
+});
+
+describe('the debts sent with a forecast', () => {
+	const loan = makeCreditAccount({
+		id: '0f1e2d3c4b5a6978',
+		creditor: 'Northwind',
+		balance: 42_000,
+		instalment: 1500,
+		arrears: 300,
+		status: 'arrears',
+		opened: '2022-03-14',
+		limit: null
+	});
+	const card = makeCreditAccount({
+		id: '8697a5b4c3d2e1f0',
+		creditor: 'Contoso',
+		kind: 'card',
+		balance: 9000,
+		instalment: 300,
+		limit: 15_000
+	});
+
+	function charge(accountId: string, linkedMerchant: string | null): DebtCharge {
+		return { accountId, name: 'A lender', amount: 300, day: 20, linkedMerchant };
+	}
+
+	function read(debts: readonly DebtCharge[], rows = statement()) {
+		const forecast = buildForecast(rows, { metric: 'net', debts });
+		const runway = buildRunway(forecast, { balance: 5000 });
+
+		return { forecast, runway };
+	}
+
+	it('sends nothing about debts for a reader with no credit report', () => {
+		const payload = buildForecastPayload(runwayFor(), { window: 6, debts: [] });
+
+		expect(payload).not.toHaveProperty('debts');
+		expect(payload).not.toHaveProperty('debtReportDate');
+	});
+
+	it('sends each debt as its lender, its kind and its figures, largest first', () => {
+		const { forecast, runway } = read([]);
+		const debts = toAiDebts([card, loan], { [loan.id]: { rate: 24.5 } }, forecast, runway.payments);
+		const payload = buildForecastPayload(runway, {
+			window: 6,
+			debts,
+			debtReportDate: '2026-06-30'
+		});
+
+		expect(payload.debtReportDate).toBe('2026-06-30');
+		expect(payload.debts).toEqual([
+			{
+				creditor: 'Northwind',
+				kind: 'loan',
+				balance: 42_000,
+				instalment: 1500,
+				annualRate: 24.5,
+				arrears: 300,
+				status: 'arrears',
+				handledThisMonth: false
+			},
+			{
+				creditor: 'Contoso',
+				kind: 'card',
+				balance: 9000,
+				instalment: 300,
+				annualRate: null,
+				arrears: 0,
+				status: 'current',
+				handledThisMonth: false
+			}
+		]);
+	});
+
+	it('never carries the id an account is known by here, when it was opened, or its limit', () => {
+		const { forecast, runway } = read([charge(loan.id, null)]);
+		const debts = toAiDebts([loan, card], {}, forecast, runway.payments);
+		const serialised = JSON.stringify(
+			buildForecastPayload(runway, { window: 6, debts, debtReportDate: '2026-06-30' })
+		);
+
+		for (const secret of [loan.id, card.id, '2022-03-14', '15000', 'limit', 'opened', 'score']) {
+			expect(serialised).not.toContain(secret);
+		}
+	});
+
+	it('calls a debt handled when its own row is one of the payments', () => {
+		const { forecast, runway } = read([charge(loan.id, null)]);
+		const [sent] = toAiDebts([loan], {}, forecast, runway.payments);
+
+		expect(sent.handledThisMonth).toBe(true);
+	});
+
+	it('still calls it handled after its debit order has gone off and left the list', () => {
+		// The gym stands in for the loan's debit order, already taken on the 6th.
+		const paid = statement([
+			makeTransaction({ date: '2026-07-06', amount: -300, merchant: 'Gym', type: 'Debit order' })
+		]);
+		const { forecast, runway } = read([charge(loan.id, 'Gym')], paid);
+
+		expect(runway.payments.some((payment) => payment.merchant === 'Gym')).toBe(false);
+		expect(toAiDebts([loan], {}, forecast, runway.payments)[0].handledThisMonth).toBe(true);
+	});
+
+	it('does not call a debt handled once the reader has ticked its row off', () => {
+		const forecast = buildForecast(statement(), {
+			metric: 'net',
+			debts: [charge(loan.id, null)],
+			excluded: [`debt:${loan.id}`]
+		});
+		const runway = buildRunway(forecast, { balance: 5000 });
+
+		expect(toAiDebts([loan], {}, forecast, runway.payments)[0].handledThisMonth).toBe(false);
+	});
+
+	it('caps how many debts it sends', () => {
+		const many = Array.from({ length: TOP_DEBTS + 5 }, (_, index) =>
+			makeCreditAccount({ id: `debt-${index}`, balance: 1000 + index })
+		);
+		const { forecast, runway } = read([]);
+		const payload = buildForecastPayload(runway, {
+			window: 6,
+			debts: toAiDebts(many, {}, forecast, runway.payments)
+		});
+
+		expect(payload.debts).toHaveLength(TOP_DEBTS);
 	});
 });

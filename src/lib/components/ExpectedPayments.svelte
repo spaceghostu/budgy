@@ -135,14 +135,18 @@
 		// on the list, and so tells a reader nothing about the one in front of
 		// them. Where it has been moved to is said after it, and only when the two
 		// are actually different days.
-		const when = payment.overdue
-			? [
-					`was due ${formatDate(payment.dueDate)}`,
-					payment.date !== payment.dueDate ? `now expected ${formatDate(payment.date)}` : ''
-				]
-					.filter((half) => half !== '')
-					.join(', ')
-			: `around ${formatDate(payment.date)}`;
+		// A debt with no statement row behind it has a day nobody observed — the
+		// reader's, or the opening one — so it is not called late for missing it.
+		const when = unplaced(payment)
+			? ''
+			: payment.overdue
+				? [
+						`was due ${formatDate(payment.dueDate)}`,
+						payment.date !== payment.dueDate ? `now expected ${formatDate(payment.date)}` : ''
+					]
+						.filter((half) => half !== '')
+						.join(', ')
+				: `around ${formatDate(payment.date)}`;
 
 		// A charge with nothing behind it says so plainly rather than claiming
 		// nought past months, which reads as evidence weighed and found wanting
@@ -154,10 +158,18 @@
 			when,
 			payment.category,
 			payment.source === 'added' ? 'added by you' : '',
-			payment.source === 'added' && payment.seen === 0 ? '' : evidence
+			payment.source === 'debt' ? 'from your credit report' : '',
+			payment.source !== 'history' && payment.source !== 'candidate' && payment.seen === 0
+				? ''
+				: evidence
 		]
 			.filter((part) => part !== '')
 			.join(' · ');
+	}
+
+	/** True for an instalment off the credit report that no payee has ever paid. */
+	function unplaced(payment: ExpectedPayment): boolean {
+		return payment.source === 'debt' && payment.seen === 0;
 	}
 
 	/** What the row's box says, for a reader who cannot see the strike-through. */
@@ -242,7 +254,7 @@
 					Debit order
 				</Badge>
 			{/if}
-			{#if payment.overdue && payment.source !== 'candidate'}
+			{#if payment.overdue && payment.source !== 'candidate' && !unplaced(payment)}
 				<!-- Late, not cancelled: it is still counted, on the first day left. -->
 				<Badge
 					variant="outline"

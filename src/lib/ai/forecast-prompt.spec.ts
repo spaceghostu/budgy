@@ -44,6 +44,22 @@ describe('FORECAST_SYSTEM_PROMPT', () => {
 	});
 });
 
+describe('what the prompt says about debts', () => {
+	it('says an instalment already in the figures must not be counted again', () => {
+		expect(FORECAST_SYSTEM_PROMPT).toContain('handledThisMonth');
+		expect(FORECAST_SYSTEM_PROMPT).toMatch(/never be counted a second time/);
+	});
+
+	it('forbids assuming an interest rate nobody entered', () => {
+		expect(FORECAST_SYSTEM_PROMPT).toMatch(/where a rate is null, do not assume one/);
+	});
+
+	it('puts arrears first and never advises missing an instalment', () => {
+		expect(FORECAST_SYSTEM_PROMPT).toMatch(/arrears come first/);
+		expect(FORECAST_SYSTEM_PROMPT).toMatch(/Never advise skipping or short-paying an instalment/);
+	});
+});
+
 describe('buildForecastPrompt', () => {
 	it('carries the payload as JSON the model can read back', () => {
 		const payload = samplePayload();

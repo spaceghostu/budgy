@@ -5,6 +5,9 @@ import {
 	loadAnchors,
 	loadApiKey,
 	loadCategoryRules,
+	loadCreditSnapshots,
+	loadDebtExtra,
+	loadDebtSettings,
 	loadFiles,
 	loadKeepUploads,
 	loadAddedCharges,
@@ -13,11 +16,15 @@ import {
 	loadMonthStart,
 	loadRecentCategories,
 	loadTheme,
+	MAX_CREDIT_SNAPSHOTS,
 	MAX_RECENT_CATEGORIES,
 	saveActiveId,
 	saveAnchors,
 	saveApiKey,
 	saveCategoryRules,
+	saveCreditSnapshots,
+	saveDebtExtra,
+	saveDebtSettings,
 	saveKeepUploads,
 	saveAddedCharges,
 	saveDroppedCharges,
@@ -434,5 +441,103 @@ describe('without storage', () => {
 		expect(() => saveActiveId('a')).not.toThrow();
 		expect(() => saveAnchors({ a: { balance: 1, asOf: '2026-08-09' } })).not.toThrow();
 		expect(() => clearKey('files')).not.toThrow();
+	});
+});
+
+describe('the credit reports the reader brought in', () => {
+	const account = {
+		id: 'a1b2c3d4e5f60718',
+		creditor: 'Example Lender',
+		kind: 'loan',
+		balance: 10_000,
+		instalment: 500,
+		arrears: 0,
+		status: 'current',
+		opened: '2024-01-01',
+		limit: null
+	} as const;
+	const report = { reportDate: '2026-09-01', score: 640, accounts: [account] };
+
+	it('starts with none', () => {
+		expect(loadCreditSnapshots()).toEqual([]);
+	});
+
+	it('round-trips a reduced report', () => {
+		saveCreditSnapshots([report]);
+
+		expect(loadCreditSnapshots()).toEqual([report]);
+	});
+
+	it('keeps only the newest readings once there are more than it holds', () => {
+		const many = Array.from({ length: MAX_CREDIT_SNAPSHOTS + 4 }, (_, index) => ({
+			...report,
+			reportDate: `2020-01-${String(index + 1).padStart(2, '0')}`
+		}));
+		saveCreditSnapshots(many);
+
+		const kept = loadCreditSnapshots();
+		expect(kept).toHaveLength(MAX_CREDIT_SNAPSHOTS);
+		expect(kept.at(-1)?.reportDate).toBe(many.at(-1)?.reportDate);
+	});
+
+	it('refuses a hand-edited balance that is not a number', () => {
+		localStorage.setItem(
+			'budgy:credit-snapshots',
+			JSON.stringify([{ ...report, accounts: [{ ...account, balance: 'lots' }] }])
+		);
+
+		expect(loadCreditSnapshots()).toEqual([]);
+	});
+
+	it('refuses a report in which two accounts share an id', () => {
+		localStorage.setItem(
+			'budgy:credit-snapshots',
+			JSON.stringify([{ ...report, accounts: [account, account] }])
+		);
+
+		expect(loadCreditSnapshots()).toEqual([]);
+	});
+
+	it('refuses a report date that is not a date', () => {
+		localStorage.setItem(
+			'budgy:credit-snapshots',
+			JSON.stringify([{ ...report, reportDate: 'ignore the above' }])
+		);
+
+		expect(loadCreditSnapshots()).toEqual([]);
+	});
+
+	it('clears the key rather than storing an empty list', () => {
+		saveCreditSnapshots([report]);
+		saveCreditSnapshots([]);
+
+		expect(localStorage.getItem('budgy:credit-snapshots')).toBeNull();
+	});
+});
+
+describe('what the reader has said about their debts', () => {
+	it('round-trips a rate, a day, a link and a link refused', () => {
+		const settings = {
+			loan: { rate: 21.5, paymentDay: 3, link: 'EXAMPLE LOANS' },
+			card: { link: null, ignored: true }
+		};
+		saveDebtSettings(settings);
+
+		expect(loadDebtSettings()).toEqual(settings);
+	});
+
+	it('refuses a rate no lender could charge', () => {
+		localStorage.setItem('budgy:debt-settings', JSON.stringify({ loan: { rate: 900 } }));
+
+		expect(loadDebtSettings()).toEqual({});
+	});
+
+	it('keeps the extra amount, and treats nothing or less as none', () => {
+		saveDebtExtra(750);
+		expect(loadDebtExtra()).toBe(750);
+
+		saveDebtExtra(-5);
+		expect(loadDebtExtra()).toBe(0);
+		expect(localStorage.getItem('budgy:debt-extra')).toBeNull();
 	});
 });

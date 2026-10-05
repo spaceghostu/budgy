@@ -19,11 +19,23 @@
  * carries card fragments, payment references and whoever was on the other end.
  * So descriptions, notes, counterparties, account names, account numbers and
  * times never reach this payload, and a test asserts they stay out.
+ *
+ * Debts off a credit report are held to the same rule, and need it more: what
+ * is sent of each is the lender, what kind of borrowing it is, and the figures.
+ * Not the account's id on this device, not when it was opened, not its limit,
+ * and not the credit score.
  */
 
 import { CALENDAR_START } from '../stats/cycle.ts';
 import type { CategoryOutlook, Runway } from '../stats/runway.ts';
-import type { ExpectedPayment, ForecastWindow } from '../stats/forecast.ts';
+import type { CreditAccount, CreditKind, CreditStatus } from '../credit/types.ts';
+import type { DebtSetting } from '../state/persistence.ts';
+import {
+	debtKey,
+	type ExpectedPayment,
+	type Forecast,
+	type ForecastWindow
+} from '../stats/forecast.ts';
 import { CURRENCY } from './payload.ts';
 
 /**
@@ -38,6 +50,32 @@ export const TOP_PAYMENTS = 40;
 
 /** How many category rows to send. Past this the rows are rounding errors. */
 export const TOP_OUTLOOK = 15;
+
+/** How many debts to send. A household past this has a different problem. */
+export const TOP_DEBTS = 20;
+
+/** One debt off the reader's credit report. */
+export interface AiDebt {
+	readonly creditor: string;
+	readonly kind: CreditKind;
+	/** Positive. What was owed on the report date. */
+	readonly balance: number;
+	/** Positive. The monthly instalment, or 0 where the bureau gave none. */
+	readonly instalment: number;
+	/** Nominal annual percentage the reader entered, or `null` when unknown. */
+	readonly annualRate: number | null;
+	/** Positive. What is overdue on it. */
+	readonly arrears: number;
+	readonly status: CreditStatus;
+	/**
+	 * True when this month's instalment is already in the figures beside it.
+	 *
+	 * Either it has been paid — and is in the opening balance — or it is one of
+	 * `payments`, or it leaves from another account altogether. In every case
+	 * adding it on again would count it twice.
+	 */
+	readonly handledThisMonth: boolean;
+}
 
 /** One charge with a date on it, still to land before payday. */
 export interface AiExpectedPayment {
@@ -127,6 +165,13 @@ export interface AiForecastPayload {
 	readonly everydayCounted: boolean;
 	readonly payments: readonly AiExpectedPayment[];
 	readonly byCategory: readonly AiCategoryOutlook[];
+	/**
+	 * What the reader owes, largest first. Left out when no report is loaded, so
+	 * a reader without one sends exactly what they always did.
+	 */
+	readonly debts?: readonly AiDebt[];
+	/** `YYYY-MM-DD` the debt figures describe. A bureau runs behind. */
+	readonly debtReportDate?: string;
 }
 
 export interface ForecastPayloadOptions {
@@ -138,6 +183,9 @@ export interface ForecastPayloadOptions {
 	readonly everydayCounted?: boolean;
 	/** How many months the projection was learned from. */
 	readonly window: ForecastWindow;
+	/** The reader's debts, already reduced. See {@link toAiDebts}. */
+	readonly debts?: readonly AiDebt[];
+	readonly debtReportDate?: string;
 }
 
 /**
@@ -182,8 +230,78 @@ export function buildForecastPayload(
 		learnedFromMonths: options.window,
 		everydayCounted: options.everydayCounted ?? true,
 		payments: runway.payments.slice(0, TOP_PAYMENTS).map(toAiPayment),
-		byCategory: runway.byCategory.slice(0, TOP_OUTLOOK).map(toAiOutlook)
+		byCategory: runway.byCategory.slice(0, TOP_OUTLOOK).map(toAiOutlook),
+		...debtFields(options)
 	};
+}
+
+function debtFields(
+	options: ForecastPayloadOptions
+): Pick<AiForecastPayload, 'debts' | 'debtReportDate'> {
+	const debts = options.debts ?? [];
+	if (debts.length === 0) return {};
+
+	const date = options.debtReportDate ?? '';
+
+	return {
+		debts: debts.slice(0, TOP_DEBTS).map(pickAiDebt),
+		...(/^\d{4}-\d{2}-\d{2}$/.test(date) ? { debtReportDate: date } : {})
+	};
+}
+
+/**
+ * Eight fields, chosen one at a time, at the last point before sending.
+ *
+ * {@link toAiDebts} already builds exactly these — this is here so that the
+ * guarantee belongs to the sender rather than to whoever calls it. A debt handed
+ * over with more on it than its type admits still leaves with only these.
+ */
+function pickAiDebt(debt: AiDebt): AiDebt {
+	return {
+		creditor: debt.creditor,
+		kind: debt.kind,
+		balance: debt.balance,
+		instalment: debt.instalment,
+		annualRate: debt.annualRate,
+		arrears: debt.arrears,
+		status: debt.status,
+		handledThisMonth: debt.handledThisMonth
+	};
+}
+
+/**
+ * Reduce the reader's debts to what a plan needs.
+ *
+ * Fields picked one at a time, like every other row that leaves: a credit
+ * account carries an id that names it on this device and a history of when it
+ * was opened, and neither helps anyone decide which debt to pay first.
+ *
+ * @param forecast The forecast on screen — it is what knows which instalments a
+ * payee on the statement already answers for.
+ * @param payments The payments the page is counting, for a debt with a row of
+ * its own.
+ */
+export function toAiDebts(
+	accounts: readonly CreditAccount[],
+	settings: Readonly<Record<string, DebtSetting>>,
+	forecast: Pick<Forecast, 'debtsCovered'>,
+	payments: readonly ExpectedPayment[]
+): readonly AiDebt[] {
+	const covered = new Set(forecast.debtsCovered);
+	const counted = new Set(payments.map((payment) => payment.key));
+
+	return [...accounts]
+		.sort((a, b) => b.balance - a.balance || a.creditor.localeCompare(b.creditor))
+		.map((account) => ({
+			creditor: account.creditor,
+			kind: account.kind,
+			balance: account.balance,
+			instalment: account.instalment,
+			annualRate: settings[account.id]?.rate ?? null,
+			arrears: account.arrears,
+			status: account.status,
+			handledThisMonth: covered.has(account.id) || counted.has(debtKey(account.id))
+		}));
 }
 
 /** Eight fields, chosen one at a time — never the whole charge. */

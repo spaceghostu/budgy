@@ -18,6 +18,7 @@
 			| '/spending'
 			| '/recurring'
 			| '/forecast'
+			| '/debts'
 			| '/transactions'
 			| '/insights'
 			| '/history';
@@ -34,7 +35,9 @@
 	 * Net worth sits second because it answers the widest question, and because
 	 * it is the one page the period row above does not scope. Forecast follows
 	 * Recurring because it is built on it: the charges that repeat are most of
-	 * what the rest of a month is already committed to.
+	 * what the rest of a month is already committed to. Debts follows Forecast
+	 * the same way: its instalments are among those commitments, seen from the
+	 * lender's end.
 	 */
 	const SECTIONS: readonly Section[] = [
 		{ id: '/', label: 'Overview' },
@@ -42,6 +45,7 @@
 		{ id: '/spending', label: 'Spending' },
 		{ id: '/recurring', label: 'Recurring' },
 		{ id: '/forecast', label: 'Forecast' },
+		{ id: '/debts', label: 'Debts' },
 		{ id: '/transactions', label: 'Transactions' },
 		{ id: '/insights', label: 'Ask Claude' },
 		{ id: '/history', label: 'History' }
