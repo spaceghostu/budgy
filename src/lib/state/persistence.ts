@@ -541,7 +541,7 @@ function hasStringFields(value: unknown, fields: readonly string[]): boolean {
 }
 
 /** Past this a figure is a typo or a hand edit, and would overflow the sums it joins. */
-const MAX_AMOUNT = 1e12;
+export const MAX_AMOUNT = 1e12;
 
 function isAmount(value: unknown): value is number {
 	return isNumber(value) && Number.isFinite(value) && value >= 0 && value <= MAX_AMOUNT;

@@ -88,7 +88,8 @@ comparison window ends at.
 ## Pages
 
 Each page answers one question, and the account and period row above them scopes
-every one at once — bar three. History lists statements, where a date range within
+every one at once — bar four. Debts is read off a credit report rather than a
+statement, so neither an account nor a period applies to it. History lists statements, where a date range within
 one says nothing about the others; net worth is a level across every account, which
 needs the whole chain behind it; and forecast is learned from the months either side
 of the one it is about, so it keeps the account and drops the period:
@@ -100,6 +101,7 @@ of the one it is about, so it keeps the account and drops the period:
 | `/spending`     | Where it went — month against month, what changed, category, merchant, filing; open any of them for its transactions |
 | `/recurring`    | What repeats, and the biggest single hits                                                                            |
 | `/forecast`     | How far the money goes — your balance from today to payday, what is still expected to leave, and a plan for saving   |
+| `/debts`        | What you owe, from your Finance365 credit report — which payment pays each debt, and which to pay off first          |
 | `/transactions` | Every row, searchable — plus anything that could not be read                                                         |
 | `/insights`     | Ask Claude to read the period — one of the two things that leave the device                                          |
 | `/history`      | Every statement kept here — open one, delete one, delete all                                                         |
@@ -388,6 +390,21 @@ you asked. Untick **Keep statements in this browser** on the History page to tur
 off, which also deletes what is already there; **Delete every statement** does the
 same without changing the setting. A statement kept under the old scheme is read
 once on upgrade and becomes the first entry rather than being dropped.
+
+Fetching from Discovery or from Finance365 is a request to that service alone, made
+with a token you paste from your own logged-in session, used once and never saved.
+Nothing either returns is sent anywhere else.
+
+A Finance365 credit report carries your identity number and the full number of every
+account. Neither is kept. The report is reduced as it is read to each account's
+lender, kind, balance, instalment and arrears, and only that is stored — in local
+storage, on this device. An account is recognised from one report to the next by a
+hash of its lender and the last four digits of its number. The app only ever asks
+for the latest report that already exists; it never has Finance365 draw a new one.
+Ask Claude on the forecast page then includes those debts — lender, kind, balance,
+instalment, arrears, status and any interest rate you entered — and the preview
+shows them before anything is sent. **Forget my credit report** on the Debts page
+deletes every report and everything you entered about them.
 
 The categories you choose for merchants are kept on this device without asking, since
 a merchant name and a label are your own filing rather than your bank's record —

@@ -68,11 +68,11 @@ describe('contentType', () => {
 });
 
 describe('CONTENT_SECURITY_POLICY', () => {
-	it('lets the window reach the two hosts the app calls, and no others', () => {
+	it('lets the window reach the three hosts the app calls, and no others', () => {
 		const connect = CONTENT_SECURITY_POLICY.split('; ').find((d) => d.startsWith('connect-src'));
 
 		expect(connect).toBe(
-			"connect-src 'self' https://api.anthropic.com https://api.discoverybank.co.za"
+			"connect-src 'self' https://api.anthropic.com https://api.discoverybank.co.za https://api.finance365.co.za"
 		);
 	});
 

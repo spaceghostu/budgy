@@ -144,9 +144,11 @@ export function assetCandidates(pathname) {
  * Electron asks for this and is right to: a window with no policy will fetch
  * anything any script in it asks for, and this one holds bank statements. The
  * bundle is entirely local, so almost everything is `'self'`; `connect-src` is
- * the exception, and it names the same two hosts the CORS bridge does — the
- * report and the statement fetch — so a script that tried to send a statement
- * anywhere else would be stopped by the window before it left.
+ * the exception, and it names the three hosts the app calls — Anthropic for a
+ * report, Discovery for a statement, Finance365 for a credit report — so a
+ * script that tried to send a statement anywhere else would be stopped by the
+ * window before it left. The first two are also on the CORS bridge; Finance365
+ * answers every origin itself and needs no bridging.
  *
  * `'unsafe-inline'` is there for scripts because SvelteKit boots the app from an
  * inline `<script>` in each prerendered page, and for styles because component
@@ -162,7 +164,7 @@ export const CONTENT_SECURITY_POLICY = [
 	"img-src 'self' data: blob:",
 	"font-src 'self' data:",
 	"worker-src 'self' blob:",
-	"connect-src 'self' https://api.anthropic.com https://api.discoverybank.co.za",
+	"connect-src 'self' https://api.anthropic.com https://api.discoverybank.co.za https://api.finance365.co.za",
 	"object-src 'none'",
 	"base-uri 'none'",
 	"form-action 'none'",

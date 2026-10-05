@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ChartCard from '$lib/components/ChartCard.svelte';
 	import DebtTable from '$lib/components/DebtTable.svelte';
+	import FetchCreditReport from '$lib/components/FetchCreditReport.svelte';
 	import PayoffPlan from '$lib/components/PayoffPlan.svelte';
 	import StatTile from '$lib/components/StatTile.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -53,12 +54,13 @@
 		<Card.Content class="text-center">
 			<h2 class="text-[15px] font-semibold">No credit report yet</h2>
 			<p class="mx-auto mt-1.5 max-w-[52ch] text-sm text-muted-foreground">
-				What you owe, what it takes each month and which debt to pay first appear here once a credit
-				report has been brought in. Reading one from Finance365 is not built yet — it arrives in a
-				later version.
+				What you owe, what it takes each month and which debt to pay first appear here once your
+				Finance365 credit report has been read.
 			</p>
 		</Card.Content>
 	</Card.Root>
+
+	<FetchCreditReport onreport={(next) => credit.accept(next)} />
 {:else}
 	<div class="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
 		<div class="min-w-0">
@@ -132,4 +134,8 @@
 			{/snippet}
 		</ChartCard>
 	{/if}
+
+	<!-- Last, once there is a report: bringing in a newer one is occasional, and
+	     the debts are what the page is for. -->
+	<FetchCreditReport onreport={(next) => credit.accept(next)} />
 {/if}

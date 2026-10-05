@@ -10,6 +10,8 @@
  * that call them (`src/lib/ai/client.ts`, `src/lib/bank/discovery.ts`).
  *
  * So the origin check is lifted for exactly those two hosts and nothing else.
+ * The app's third call, to Finance365 for a credit report, is not here because
+ * it does not need to be: that API answers every origin itself.
  * `webSecurity` stays on, every other origin is still refused, and the list is
  * a literal in this file rather than a wildcard, so widening it is an edit
  * somebody has to make on purpose.
