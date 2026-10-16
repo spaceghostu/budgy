@@ -131,6 +131,17 @@
 	let error = $state<string | null>(null);
 
 	/**
+	 * What came back, when what came back is the failure. Shown on request
+	 * under the error, so "could not read" can be checked rather than taken on
+	 * trust — a reply cut off at the token limit looks nothing like one that
+	 * skipped the tool.
+	 */
+	let raw = $state<string | null>(null);
+
+	/** Said instead of drawing an empty box, which reads as a rendering fault. */
+	const EMPTY_REPLY = '(The reply was empty.)';
+
+	/**
 	 * The conversation, oldest first.
 	 *
 	 * Every exchange is kept rather than only the latest answer: a follow-up is
@@ -221,6 +232,7 @@
 	): Promise<ReportReply | null> {
 		pending = kind;
 		error = null;
+		raw = null;
 		inFlight = new AbortController();
 
 		try {
@@ -238,6 +250,7 @@
 				failure instanceof AiRequestError
 					? failure.message
 					: 'Something went wrong asking Claude. Try again.';
+			raw = failure instanceof AiRequestError ? failure.raw : null;
 			return null;
 		} finally {
 			pending = null;
@@ -499,6 +512,24 @@
 					>
 						<Alert.Description class="text-destructive">{error}</Alert.Description>
 					</Alert.Root>
+
+					{#if raw !== null}
+						<Collapsible.Root class="mt-2 text-[13px] text-muted-foreground">
+							<Collapsible.Trigger
+								class="flex cursor-pointer items-center gap-1 py-1 [&[data-state=open]>svg]:rotate-90"
+							>
+								<ChevronRightIcon class="size-3.5 transition-transform" aria-hidden="true" />
+								View raw output
+							</Collapsible.Trigger>
+							<Collapsible.Content>
+								<pre
+									class="mt-2 max-h-80 overflow-auto rounded-md border bg-muted p-3 font-mono text-[11.5px]/[1.5]">{raw ===
+									''
+										? EMPTY_REPLY
+										: raw}</pre>
+							</Collapsible.Content>
+						</Collapsible.Root>
+					{/if}
 				{/if}
 
 				{#if turns.length > 0}

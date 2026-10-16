@@ -380,6 +380,39 @@ describe('AiInsightsCard.svelte', () => {
 		await expect.element(page.getByRole('alert')).toHaveTextContent('That API key was rejected.');
 	});
 
+	it('offers the raw reply when Claude answers in a shape it cannot read', async () => {
+		stubFetch({ headline: 'Half a report' });
+		render(AiInsightsCard, props());
+
+		await page.getByLabelText('Your Anthropic API key').fill('sk-ant-test');
+		await page.getByRole('button', { name: 'Read my spending' }).click();
+		await expect.element(page.getByRole('alert')).toHaveTextContent('could not read');
+
+		await page.getByRole('button', { name: 'View raw output' }).click();
+
+		await expect
+			.element(page.getByText('"headline": "Half a report"', { exact: false }))
+			.toBeInTheDocument();
+	});
+
+	it('offers no raw reply for a failure that had none', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(() =>
+				Promise.resolve(
+					new Response(JSON.stringify({ error: { message: 'bad key' } }), { status: 401 })
+				)
+			)
+		);
+		render(AiInsightsCard, props());
+
+		await page.getByLabelText('Your Anthropic API key').fill('sk-ant-wrong');
+		await page.getByRole('button', { name: 'Read my spending' }).click();
+		await expect.element(page.getByRole('alert')).toHaveTextContent('rejected');
+
+		expect(page.getByRole('button', { name: 'View raw output' }).elements()).toHaveLength(0);
+	});
+
 	it('keeps the key only when asked to', async () => {
 		render(AiInsightsCard, { insights: insights() });
 		await page.getByLabelText('Your Anthropic API key').fill('sk-ant-test');

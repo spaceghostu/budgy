@@ -293,9 +293,47 @@ describe('requestSpendingReport', () => {
 		).rejects.toThrow(AiRequestError);
 	});
 
+	it('keeps the reply it could not read, so the reader can see what came back', async () => {
+		stubFetch(toolUseResponse({ headline: 'Nothing else' }));
+
+		const failure = await requestSpendingReport({
+			opening: opening(),
+			apiKey: 'sk-ant-key'
+		}).catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(AiRequestError);
+		const raw = (failure as AiRequestError).raw ?? '';
+		// Pretty-printed, so it can be read rather than scrolled sideways.
+		expect(raw).toContain('\n  "content": [');
+		expect(raw).toContain('Nothing else');
+		expect(raw).toContain('"stop_reason": "tool_use"');
+	});
+
+	it('keeps a reply that is not JSON at all exactly as it arrived', async () => {
+		stubFetch(new Response('<html>proxy says hi</html>', { status: 200 }));
+
+		const failure = await requestSpendingReport({
+			opening: opening(),
+			apiKey: 'sk-ant-key'
+		}).catch((error: unknown) => error);
+
+		expect((failure as AiRequestError).raw).toBe('<html>proxy says hi</html>');
+	});
+
+	it('has no raw reply to show for a failure that is not about the reply', async () => {
+		stubFetch(errorResponse(401, 'invalid x-api-key'));
+
+		const failure = await requestSpendingReport({
+			opening: opening(),
+			apiKey: 'sk-ant-key'
+		}).catch((error: unknown) => error);
+
+		expect((failure as AiRequestError).raw).toBeNull();
+	});
+
 	it('lets an abort during the body read through as an abort, not a bad reply', async () => {
 		const aborted = new Response('{}', { status: 200 });
-		vi.spyOn(aborted, 'json').mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+		vi.spyOn(aborted, 'text').mockRejectedValue(new DOMException('Aborted', 'AbortError'));
 		stubFetch(aborted);
 
 		await expect(

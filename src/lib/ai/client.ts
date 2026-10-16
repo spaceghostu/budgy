@@ -27,9 +27,18 @@ export const MAX_TOKENS = 1500;
 
 /** A failure worth showing the reader, already worded for them. */
 export class AiRequestError extends Error {
-	constructor(message: string) {
+	/**
+	 * The reply as it came back, where the reply itself is what failed — so the
+	 * reader can see what Claude actually said instead of only being told it was
+	 * unreadable. Pretty-printed when it is JSON, verbatim when it is not.
+	 * `null` for every other failure: there was no reply worth showing.
+	 */
+	readonly raw: string | null;
+
+	constructor(message: string, raw: string | null = null) {
 		super(message);
 		this.name = 'AiRequestError';
+		this.raw = raw;
 	}
 }
 
@@ -140,9 +149,13 @@ export async function requestSpendingReport(request: SpendingRequest): Promise<R
 	const response = await send(request, key);
 	if (!response.ok) throw new AiRequestError(await describeFailure(response));
 
-	const reply = toReply(await readBody(response), (request.brief ?? SPENDING_BRIEF).tool.name);
+	const body = await readBody(response);
+	const reply = toReply(body.json, (request.brief ?? SPENDING_BRIEF).tool.name);
 	if (reply === null) {
-		throw new AiRequestError('Claude replied in a shape this app could not read. Try again.');
+		throw new AiRequestError(
+			'Claude replied in a shape this app could not read. Try again.',
+			body.json === null ? body.text : JSON.stringify(body.json, null, 2)
+		);
 	}
 
 	return reply;
@@ -180,19 +193,34 @@ function buildMessages(request: SpendingRequest): readonly unknown[] {
 	return messages;
 }
 
+/** A reply's body: as it arrived, and as JSON where it is JSON at all. */
+interface ReplyBody {
+	readonly text: string;
+	/** `null` where the body is not JSON. */
+	readonly json: unknown;
+}
+
 /**
- * The reply's JSON, or `null` if it is not JSON at all.
+ * The reply's body, read as text first so that a reply which cannot be used can
+ * still be shown as it arrived.
  *
  * A cancel can land between the headers arriving and the body finishing, which
- * rejects here rather than at the fetch. Letting that through as `null` would
- * report the reader's own cancel as a malformed reply.
+ * rejects here rather than at the fetch. Letting that through as an empty body
+ * would report the reader's own cancel as a malformed reply.
  */
-async function readBody(response: Response): Promise<unknown> {
+async function readBody(response: Response): Promise<ReplyBody> {
+	let text: string;
 	try {
-		return await response.json();
+		text = await response.text();
 	} catch (error: unknown) {
 		if (error instanceof DOMException && error.name === 'AbortError') throw error;
-		return null;
+		return { text: '', json: null };
+	}
+
+	try {
+		return { text, json: JSON.parse(text) as unknown };
+	} catch {
+		return { text, json: null };
 	}
 }
 
