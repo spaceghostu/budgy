@@ -93,9 +93,9 @@
 				Your files are read by this page and analysed in memory. There is no server, no upload and
 				no account. Each statement you open is kept in this browser so the next visit still has it,
 				and so a year of exports builds into a history — on this device only, and clearable from the
-				History page. The one exception is Ask Claude, which sends totals — never descriptions or
-				account numbers — to Anthropic when you ask it to, and shows you exactly what it would send
-				first.
+				History page. The one exception is Ask Claude, which sends totals to Anthropic when you ask
+				it to — descriptions and account numbers only if you tick the box to send every transaction
+				— and shows you exactly what it would send first.
 			</p>
 		</Card.Content>
 	</Card.Root>

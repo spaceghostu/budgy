@@ -3,7 +3,7 @@
 	import DotIcon from '@lucide/svelte/icons/dot';
 	import TrendingUpIcon from '@lucide/svelte/icons/trending-up';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
-	import { onMount, type Component } from 'svelte';
+	import { onMount, type Component, type Snippet } from 'svelte';
 	import * as Alert from '$lib/components/ui/alert/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
@@ -74,6 +74,16 @@
 		 */
 		sends: string;
 		/**
+		 * What the standing privacy note promises is, or is not, in the message.
+		 *
+		 * A prop because it is the one promise a page can change: a page that can
+		 * send the statement's own lines has to stop saying it never does the moment
+		 * the reader asks it to.
+		 */
+		includes?: string;
+		/** Choices about what is sent, drawn under the note box. */
+		options?: Snippet;
+		/**
 		 * Why a conversation no longer matches the screen, when the figures have
 		 * moved. Named by the parent because only it knows what the figures are.
 		 *
@@ -100,6 +110,8 @@
 		noteHint = 'Steers what Claude looks at. Sent word for word, so leave anything out you would not want to send.',
 		busyLabel,
 		sends,
+		includes = 'No descriptions, references, account numbers or counterparties are included',
+		options,
 		describeSent
 	}: Props = $props();
 
@@ -291,8 +303,7 @@
 			Everything else is computed on this device. Press the button and a summary — {sends} — is sent to
 			Anthropic under
 			{configured ? 'the API key this build was given' : 'your own API key'}, plus anything you type
-			in the note box, word for word. No descriptions, references, account numbers or counterparties
-			are included, and nothing is sent until you press it.
+			in the note box, word for word. {includes}, and nothing is sent until you press it.
 		</p>
 
 		<Collapsible.Root class="mt-3 text-[13px] text-muted-foreground">
@@ -326,6 +337,8 @@
 			/>
 			<p class={hint}>{noteHint}</p>
 		</div>
+
+		{@render options?.()}
 
 		<div class="mt-3.5 flex flex-wrap items-start gap-3">
 			<div class="min-w-0 flex-1 basis-65">

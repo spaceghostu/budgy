@@ -266,9 +266,18 @@ figures:
   the projection **as it is on screen**: the window you chose, the charges you have
   ticked off, and the everyday spending only if the page is counting it.
 
-Both send **aggregates and named charges only**. Descriptions, notes, counterparties,
-account names, account numbers and times are all dropped, and a test on each payload
-asserts they stay dropped.
+Both send **aggregates and named charges only** by default. Descriptions, notes,
+counterparties, account names, account numbers and times are all dropped, and a test on
+each payload asserts they stay dropped.
+
+The Insights read has one opt-in past that: **Send every transaction in full**. Tick it
+and every line in the period on screen goes with the totals, as the bank gave it —
+description, reference, counterparty, account number, time and your own notes — so
+Claude can answer what a rollup cannot: which payment that was, or what one merchant's
+lines came to. It is off on every visit and never remembered, the privacy note and the
+preview change the moment it is ticked, and each line is written on one line of its own
+so a long period does not cost its size again in whitespace. A follow-up resends it, as
+it resends everything else.
 
 The plan card knows what it cannot say. Without a running balance — no printed
 balances and none entered on the overview — it is told the balances are a shape rather

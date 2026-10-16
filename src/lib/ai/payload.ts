@@ -7,11 +7,16 @@
  * it can be shown to the reader before they send it, and there is a single
  * place to check when the question is "what does Anthropic actually see?".
  *
- * Aggregates only. Category and merchant totals say where the money went; the
- * bank's description does not add to that and carries card fragments, payment
- * references and whoever was on the other end. So descriptions, notes,
- * counterparties, account names, account numbers and times are all dropped, and
- * a test asserts they stay dropped.
+ * Aggregates by default. Category and merchant totals say where the money went;
+ * the bank's description does not add to that and carries card fragments,
+ * payment references and whoever was on the other end. So unless the reader asks
+ * for more, descriptions, notes, counterparties, account names, account numbers
+ * and times are all dropped, and a test asserts they stay dropped.
+ *
+ * The reader can ask for more: every line in the period, in full, so Claude can
+ * answer what a rollup cannot — which payment that was, what one merchant's
+ * lines came to. That is opt-in, off by default and never remembered, and it is
+ * still decided here, so the answer to "what is sent?" stays in this one file.
  */
 
 import { groupFlowByMonth, round } from '../stats/balance.ts';
@@ -103,6 +108,42 @@ export interface AiPayload {
 	readonly merchants: readonly AiBucket[];
 	readonly recurring: readonly AiRecurring[];
 	readonly largestExpenses: readonly AiExpense[];
+	/**
+	 * Every line in the period, oldest first. Present only when the reader asked
+	 * for the full data — see {@link buildAiPayload}.
+	 */
+	readonly transactions?: readonly AiTransaction[];
+}
+
+/**
+ * One line of the statement, as the bank gave it.
+ *
+ * Everything the reader can see about the row, and none of this app's own
+ * bookkeeping: the id, file order, timestamp and source say nothing about the
+ * money, and `flow` is the sign of `amount` again. A field the bank left blank
+ * is left out rather than sent empty — across a few thousand lines that is most
+ * of the cost of sending them, and an empty string tells the model nothing.
+ */
+export interface AiTransaction {
+	readonly date: string;
+	/** `HH:MM:SS`. */
+	readonly time?: string;
+	readonly account?: string;
+	readonly accountNumber?: string;
+	/** The bank's transaction type, e.g. `Debit order`. */
+	readonly type?: string;
+	readonly description?: string;
+	readonly counterparty?: string;
+	readonly merchant?: string;
+	readonly category?: string;
+	readonly bankCategory?: string;
+	readonly note?: string;
+	/** Signed. Negative is money leaving the account. */
+	readonly amount: number;
+	/** The balance the bank printed beside the row. */
+	readonly balance?: number;
+	readonly isFee: boolean;
+	readonly isDeclined: boolean;
 }
 
 /**
@@ -115,8 +156,16 @@ export interface AiPayload {
  * @param start Day of the month a month opens on. The model is told what the
  * reader's months are, so an answer about "August" means the same span of days
  * the charts drew for August.
+ * @param transactions The lines {@link insights} was built from, to send in full.
+ * Left out, nothing but aggregates is sent. Passed by the caller rather than
+ * read off `insights`, which holds only the biggest few, so that sending them is
+ * something a call site has to ask for in so many words.
  */
-export function buildAiPayload(insights: Insights, start: number = CALENDAR_START): AiPayload {
+export function buildAiPayload(
+	insights: Insights,
+	start: number = CALENDAR_START,
+	transactions?: readonly Transaction[]
+): AiPayload {
 	const { summary } = insights;
 
 	return {
@@ -147,7 +196,8 @@ export function buildAiPayload(insights: Insights, start: number = CALENDAR_STAR
 		categories: insights.categories.slice(0, TOP_BUCKETS).map(toAiBucket),
 		merchants: insights.merchants.slice(0, TOP_BUCKETS).map(toAiBucket),
 		recurring: insights.recurring.slice(0, TOP_RECURRING).map(toAiRecurring),
-		largestExpenses: insights.largestExpenses.map(toAiExpense)
+		largestExpenses: insights.largestExpenses.map(toAiExpense),
+		...(transactions === undefined ? {} : { transactions: toAiTransactions(transactions) })
 	};
 }
 
@@ -183,4 +233,38 @@ function toAiExpense(transaction: Transaction): AiExpense {
 		category: transaction.category,
 		amount: round(Math.abs(transaction.amount))
 	};
+}
+
+/** Oldest first, ties in file order — the order the statement itself reads in. */
+function toAiTransactions(transactions: readonly Transaction[]): readonly AiTransaction[] {
+	return [...transactions]
+		.sort((a, b) => a.timestamp - b.timestamp || a.fileOrder - b.fileOrder)
+		.map(toAiTransaction);
+}
+
+/** Every field the reader can see on the row, chosen by name like the four above. */
+function toAiTransaction(transaction: Transaction): AiTransaction {
+	return {
+		date: transaction.date,
+		...present('time', transaction.time),
+		...present('account', transaction.account),
+		...present('accountNumber', transaction.accountNumber),
+		...present('type', transaction.type),
+		...present('description', transaction.description),
+		...present('counterparty', transaction.counterparty),
+		...present('merchant', transaction.merchant),
+		...present('category', transaction.category),
+		...present('bankCategory', transaction.bankCategory),
+		...present('note', transaction.note),
+		amount: round(transaction.amount),
+		...(transaction.balance === null ? {} : { balance: round(transaction.balance) }),
+		isFee: transaction.isFee,
+		isDeclined: transaction.isDeclined
+	};
+}
+
+/** `{ [key]: value }`, or nothing at all where the bank left the field blank. */
+function present<K extends string>(key: K, value: string): Partial<Record<K, string>> {
+	const trimmed = value.trim();
+	return trimmed === '' ? {} : ({ [key]: trimmed } as Record<K, string>);
 }

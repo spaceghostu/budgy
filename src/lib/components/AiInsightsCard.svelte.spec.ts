@@ -22,25 +22,34 @@ import { REPORT_TOOL } from '../ai/prompt.ts';
 import { formatDate } from '../format.ts';
 import { buildInsights } from '../stats/insights.ts';
 import { makeTransaction, resetTransactionIds } from '../testing/transaction.ts';
-import type { Insights } from '../types.ts';
+import type { Insights, Transaction } from '../types.ts';
+
+function rows(): readonly Transaction[] {
+	resetTransactionIds();
+	return [
+		makeTransaction({ date: '2026-01-05', amount: 8000 }),
+		makeTransaction({
+			date: '2026-01-09',
+			amount: -1200,
+			category: 'Food and Drink',
+			merchant: 'Grocer',
+			description: 'CARD 4321 REF 55667788',
+			note: 'a private note'
+		})
+	];
+}
 
 function insights(): Insights {
-	resetTransactionIds();
-	return buildInsights(
-		[
-			makeTransaction({ date: '2026-01-05', amount: 8000 }),
-			makeTransaction({
-				date: '2026-01-09',
-				amount: -1200,
-				category: 'Food and Drink',
-				merchant: 'Grocer',
-				description: 'CARD 4321 REF 55667788',
-				note: 'a private note'
-			})
-		],
-		6800
-	);
+	return buildInsights(rows(), 6800);
 }
+
+/** The card as the page renders it: the figures, and the lines they came from. */
+function props(): { insights: Insights; transactions: readonly Transaction[] } {
+	const transactions = rows();
+	return { insights: buildInsights(transactions, 6800), transactions };
+}
+
+const SEND_ALL = 'Send every transaction in full';
 
 const REPORT = {
 	headline: 'You kept R6 800 of R8 000.',
@@ -103,6 +112,75 @@ describe('AiInsightsCard.svelte', () => {
 		await expect.element(preview).toBeInTheDocument();
 		await expect.element(preview).not.toHaveTextContent('CARD 4321');
 		await expect.element(preview).not.toHaveTextContent('a private note');
+	});
+
+	it('sends totals only until the reader asks for every line', async () => {
+		render(AiInsightsCard, props());
+
+		await expect.element(page.getByLabelText(SEND_ALL, { exact: false })).not.toBeChecked();
+		await expect
+			.element(page.getByText('No descriptions, references, account numbers', { exact: false }))
+			.toBeInTheDocument();
+	});
+
+	it('shows every line, description and note included, once the reader opts in', async () => {
+		render(AiInsightsCard, props());
+		await page.getByLabelText(SEND_ALL, { exact: false }).click();
+		await page.getByText('See exactly what would be sent').click();
+
+		const preview = page.getByText('"currency": "ZAR"', { exact: false });
+		await expect.element(preview).toHaveTextContent('CARD 4321 REF 55667788');
+		await expect.element(preview).toHaveTextContent('a private note');
+	});
+
+	it('stops promising to leave descriptions out once they are going', async () => {
+		render(AiInsightsCard, props());
+		await page.getByLabelText(SEND_ALL, { exact: false }).click();
+
+		// The new promise first: it waits for the change, so the absence check
+		// after it cannot pass on a DOM that has not caught up yet.
+		await expect
+			.element(page.getByText('Every transaction in the period goes with it', { exact: false }))
+			.toBeInTheDocument();
+		expect(
+			page.getByText('No descriptions, references, account numbers', { exact: false }).elements()
+		).toHaveLength(0);
+	});
+
+	it('sends the lines it showed', async () => {
+		stubFetch();
+		render(AiInsightsCard, props());
+
+		await page.getByLabelText('Your Anthropic API key').fill('sk-ant-test');
+		await page.getByLabelText(SEND_ALL, { exact: false }).click();
+		await page.getByRole('button', { name: 'Read my spending' }).click();
+		await expect.element(page.getByText(REPORT.headline)).toBeInTheDocument();
+
+		const body = JSON.parse((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string) as {
+			messages: { content: string }[];
+		};
+		expect(body.messages[0].content).toContain('CARD 4321 REF 55667788');
+	});
+
+	it('does not offer the lines when there are none to send', async () => {
+		render(AiInsightsCard, { insights: insights() });
+
+		expect(page.getByLabelText(SEND_ALL, { exact: false }).elements()).toHaveLength(0);
+	});
+
+	it('says so when the choice to send every line changes under a report', async () => {
+		stubFetch();
+		render(AiInsightsCard, props());
+
+		await page.getByLabelText('Your Anthropic API key').fill('sk-ant-test');
+		await page.getByRole('button', { name: 'Read my spending' }).click();
+		await expect.element(page.getByText(REPORT.headline)).toBeInTheDocument();
+
+		await page.getByLabelText(SEND_ALL, { exact: false }).click();
+
+		await expect
+			.element(page.getByText('as totals only. What is on screen has changed', { exact: false }))
+			.toBeInTheDocument();
 	});
 
 	it('renders the report Claude returns', async () => {
@@ -249,7 +327,7 @@ describe('AiInsightsCard.svelte', () => {
 		});
 
 		await expect
-			.element(page.getByText('The figures on screen have changed since', { exact: false }))
+			.element(page.getByText('What is on screen has changed since', { exact: false }))
 			.toBeInTheDocument();
 	});
 

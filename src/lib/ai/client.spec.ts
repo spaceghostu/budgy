@@ -249,6 +249,14 @@ describe('requestSpendingReport', () => {
 		).rejects.toThrow(/max_tokens/);
 	});
 
+	it('says a prompt that is too long is too much to send, and what to do about it', async () => {
+		stubFetch(errorResponse(400, 'prompt is too long: 240000 tokens > 200000 maximum'));
+
+		await expect(
+			requestSpendingReport({ opening: opening(), apiKey: 'sk-ant-key' })
+		).rejects.toThrow(/too much to send.*narrow the period.*start again/i);
+	});
+
 	it('survives an error body that is not JSON', async () => {
 		stubFetch(new Response('<html>gateway</html>', { status: 502 }));
 

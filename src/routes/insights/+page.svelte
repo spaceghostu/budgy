@@ -11,5 +11,9 @@
 {:else}
 	<!-- On its own page, and the only one that can send anything off the device.
 	     It asks first, and shows what it would send. -->
-	<AiInsightsCard insights={state.insights} monthStart={state.monthStart} />
+	<AiInsightsCard
+		insights={state.insights}
+		monthStart={state.monthStart}
+		transactions={state.visible}
+	/>
 {/if}

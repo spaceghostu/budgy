@@ -5,23 +5,35 @@ import {
 	REPORT_TOOL,
 	SYSTEM_PROMPT,
 	buildFollowUp,
-	buildUserPrompt
+	buildPromptFigures,
+	buildUserPrompt,
+	withNote
 } from './prompt.ts';
 import { buildAiPayload } from './payload.ts';
 import { buildInsights } from '../stats/insights.ts';
 import { makeTransaction, resetTransactionIds } from '../testing/transaction.ts';
 
-function samplePayload() {
+function sampleRows() {
 	resetTransactionIds();
-	return buildAiPayload(
-		buildInsights(
-			[
-				makeTransaction({ date: '2026-01-05', amount: 5000 }),
-				makeTransaction({ date: '2026-01-20', amount: -400, category: 'Food' })
-			],
-			4600
-		)
-	);
+	return [
+		makeTransaction({ date: '2026-01-05', amount: 5000 }),
+		makeTransaction({
+			date: '2026-01-20',
+			amount: -400,
+			category: 'Food',
+			description: 'CARD 1234 REF 998877'
+		})
+	];
+}
+
+function samplePayload() {
+	return buildAiPayload(buildInsights(sampleRows(), 4600));
+}
+
+/** The same period, with every line sent in full. */
+function fullPayload() {
+	const rows = sampleRows();
+	return buildAiPayload(buildInsights(rows, 4600), undefined, rows);
 }
 
 describe('SYSTEM_PROMPT', () => {
@@ -67,6 +79,50 @@ describe('buildUserPrompt', () => {
 
 		expect(prompt).toContain('x'.repeat(MAX_NOTE_LENGTH));
 		expect(prompt).not.toContain('x'.repeat(MAX_NOTE_LENGTH + 1));
+	});
+});
+
+describe('buildUserPrompt, with every line', () => {
+	it('still carries the payload as one JSON object the model can read back', () => {
+		const payload = fullPayload();
+		const prompt = buildUserPrompt(payload);
+		const parsed: unknown = JSON.parse(
+			prompt.slice(prompt.indexOf('{'), prompt.lastIndexOf('}') + 1)
+		);
+
+		expect(parsed).toEqual(JSON.parse(JSON.stringify(payload)));
+	});
+
+	it('writes each line on one line, so a year of them is not ten times the size', () => {
+		const prompt = buildUserPrompt(fullPayload());
+		const line = prompt.split('\n').find((text) => text.includes('CARD 1234 REF 998877'));
+
+		expect(line).toBeDefined();
+		expect(line).toContain('"amount":-400');
+		expect(line).toContain('"date":"2026-01-20"');
+	});
+
+	it('says the lines are there, so the model does not take it for a summary alone', () => {
+		expect(buildUserPrompt(fullPayload())).toMatch(/every transaction/i);
+		expect(buildUserPrompt(samplePayload())).not.toMatch(/every transaction/i);
+	});
+});
+
+describe('buildPromptFigures and withNote', () => {
+	it('join into exactly the message buildUserPrompt builds', () => {
+		const payload = fullPayload();
+
+		expect(withNote(buildPromptFigures(payload), 'Why the fees?')).toBe(
+			buildUserPrompt(payload, 'Why the fees?')
+		);
+		expect(withNote(buildPromptFigures(payload), '  ')).toBe(buildUserPrompt(payload));
+	});
+});
+
+describe('SYSTEM_PROMPT, with every line', () => {
+	it('lets the model quote individual lines when they were sent', () => {
+		expect(SYSTEM_PROMPT).toContain('`transactions`');
+		expect(SYSTEM_PROMPT).toMatch(/individual (lines|transactions)/i);
 	});
 });
 

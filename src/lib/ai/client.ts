@@ -256,6 +256,13 @@ async function describeFailure(response: Response): Promise<string> {
 			break;
 	}
 
+	// Over the model's context the API answers 400, not 413. Most likely when
+	// every transaction is going too. "Start again", because a follow-up resends
+	// what the conversation opened with — unticking alone changes nothing for it.
+	if (response.status === 400 && detail !== null && /prompt is too long/i.test(detail)) {
+		return 'That is too much to send at once. Narrow the period, or untick sending every transaction, and start again.';
+	}
+
 	if (response.status >= 500) {
 		return `Anthropic had a problem (${response.status}). Try again shortly.`;
 	}

@@ -188,6 +188,99 @@ describe('buildAiPayload', () => {
 		}
 	});
 
+	it('leaves the lines out unless they are asked for', () => {
+		const payload = buildAiPayload(
+			insightsFor([makeTransaction({ date: '2026-01-05', amount: -400 })])
+		);
+
+		expect(payload.transactions).toBeUndefined();
+	});
+
+	it('carries every line in full when asked — description, note, counterparty, account and time', () => {
+		resetTransactionIds();
+		const rows = [
+			makeTransaction({
+				date: '2026-01-05',
+				time: '13:45:02',
+				amount: -1200,
+				type: 'Card purchase',
+				description: 'CARD 1234 REF 998877',
+				note: 'private note',
+				counterparty: 'A Person',
+				account: 'Cheque account',
+				accountNumber: '1234567890',
+				merchant: 'Airline',
+				category: 'Flights',
+				bankCategory: 'Travel',
+				balance: 3800
+			})
+		];
+		const payload = buildAiPayload(insightsFor(rows), undefined, rows);
+
+		expect(payload.transactions).toEqual([
+			{
+				date: '2026-01-05',
+				time: '13:45:02',
+				account: 'Cheque account',
+				accountNumber: '1234567890',
+				type: 'Card purchase',
+				description: 'CARD 1234 REF 998877',
+				counterparty: 'A Person',
+				merchant: 'Airline',
+				category: 'Flights',
+				bankCategory: 'Travel',
+				note: 'private note',
+				amount: -1200,
+				balance: 3800,
+				isFee: false,
+				isDeclined: false
+			}
+		]);
+	});
+
+	it('keeps the sign on a line, so money in and money out stay apart', () => {
+		resetTransactionIds();
+		const rows = [
+			makeTransaction({ date: '2026-01-05', amount: 5000 }),
+			makeTransaction({ date: '2026-01-06', amount: -250.5 })
+		];
+		const payload = buildAiPayload(insightsFor(rows), undefined, rows);
+
+		expect(payload.transactions?.map((line) => line.amount)).toEqual([5000, -250.5]);
+	});
+
+	it('drops fields the bank left blank rather than sending them empty', () => {
+		resetTransactionIds();
+		const rows = [makeTransaction({ date: '2026-01-05', amount: -400 })];
+		const [line] = buildAiPayload(insightsFor(rows), undefined, rows).transactions ?? [];
+
+		expect(line).not.toHaveProperty('accountNumber');
+		expect(line).not.toHaveProperty('counterparty');
+		expect(line).not.toHaveProperty('note');
+		expect(line).not.toHaveProperty('balance');
+	});
+
+	it('never carries this app’s own bookkeeping — ids, file order, source', () => {
+		resetTransactionIds();
+		const rows = [makeTransaction({ date: '2026-01-05', amount: -400 })];
+		const [line] = buildAiPayload(insightsFor(rows), undefined, rows).transactions ?? [];
+
+		for (const field of ['id', 'fileOrder', 'timestamp', 'source', 'flow']) {
+			expect(line).not.toHaveProperty(field);
+		}
+	});
+
+	it('sends the lines oldest first, whatever order they arrive in', () => {
+		resetTransactionIds();
+		const rows = [
+			makeTransaction({ date: '2026-01-09', amount: -300 }),
+			makeTransaction({ date: '2026-01-02', amount: -100 })
+		];
+		const payload = buildAiPayload(insightsFor(rows), undefined, rows);
+
+		expect(payload.transactions?.map((line) => line.date)).toEqual(['2026-01-02', '2026-01-09']);
+	});
+
 	it('holds up on an empty statement rather than throwing', () => {
 		const payload = buildAiPayload(insightsFor([], 0));
 
